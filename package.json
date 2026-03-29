@@ -7,11 +7,14 @@
     "packages/*"
   ],
   "scripts": {
-    "postinstall": "npm run build -w @secure-viewer/shared",
+    "postinstall": "npm --prefix packages/shared run build",
     "dev": "concurrently \"npm run dev -w @secure-viewer/api\" \"npm run dev -w @secure-viewer/web\"",
     "dev:api": "npm run dev -w @secure-viewer/api",
     "dev:web": "npm run dev -w @secure-viewer/web",
-    "build": "cd packages/shared && npm run build && cd ../../apps/api && npm run build && cd ../web && npm run build",
+    "build:shared": "npm --prefix packages/shared run build",
+    "build:api": "npm --prefix apps/api run build",
+    "build:web": "npm --prefix apps/web run build",
+    "build": "npm run build:shared && npm run build:api && npm run build:web",
     "test": "npm run test -w @secure-viewer/shared && npm run test -w @secure-viewer/api && npm run test -w @secure-viewer/web"
   },
   "devDependencies": {
