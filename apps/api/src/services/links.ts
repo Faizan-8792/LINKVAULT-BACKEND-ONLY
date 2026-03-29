@@ -93,7 +93,7 @@ export async function createSecureLink(input: {
   return {
     linkId: String(link._id),
     token,
-    viewerUrl: `${input.clientUrl.replace(/\/$/, "")}/view/${encodeURIComponent(token)}`,
+    viewerUrl: `${input.clientUrl.replace(/\/$/, "")}/v/${encodeURIComponent(token)}`,
   };
 }
 

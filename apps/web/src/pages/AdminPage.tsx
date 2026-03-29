@@ -316,7 +316,13 @@ function Dashboard({ userName }: { userName: string }) {
       return response.data.assets;
     },
     onSuccess(assets) {
-      setUploadedAssets(assets);
+      setUploadedAssets((current) =>
+        [...current, ...assets].map((asset, index) => ({
+          ...asset,
+          order: index,
+        })),
+      );
+      setFiles([]);
     },
   });
 
@@ -484,13 +490,66 @@ function Dashboard({ userName }: { userName: string }) {
                   multiple
                   type="file"
                   accept="image/*,video/*,audio/*"
-                  onChange={(event) => setFiles(Array.from(event.target.files ?? []))}
+                  onChange={(event) => {
+                    const incomingFiles = Array.from(event.target.files ?? []);
+                    if (!incomingFiles.length) {
+                      return;
+                    }
+
+                    setFiles((current) => {
+                      const merged = [...current];
+                      for (const file of incomingFiles) {
+                        const exists = merged.some(
+                          (candidate) =>
+                            candidate.name === file.name &&
+                            candidate.size === file.size &&
+                            candidate.lastModified === file.lastModified,
+                        );
+                        if (!exists) {
+                          merged.push(file);
+                        }
+                      }
+                      return merged;
+                    });
+
+                    event.currentTarget.value = "";
+                  }}
                 />
               </label>
             </div>
             {files.length > 0 && (
-              <div className="mt-4 text-sm text-slate-600">
-                {files.length} file(s) ready: {files.map((file) => file.name).join(", ")}
+              <div className="mt-4 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-slate-600">
+                  <p>{files.length} file(s) ready for upload.</p>
+                  <button
+                    type="button"
+                    onClick={() => setFiles([])}
+                    className="rounded-full border border-brand-200 bg-white px-3 py-1 text-xs font-semibold text-brand-700"
+                  >
+                    Clear selection
+                  </button>
+                </div>
+                <div className="max-h-44 space-y-2 overflow-auto pr-1 secure-scrollbar">
+                  {files.map((file, index) => (
+                    <div
+                      key={`${file.name}-${file.size}-${file.lastModified}`}
+                      className="flex items-center justify-between gap-3 rounded-xl bg-white/80 px-3 py-2 text-sm"
+                    >
+                      <p className="truncate text-slate-700">
+                        {index + 1}. {file.name}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setFiles((current) => current.filter((candidate) => candidate !== file))
+                        }
+                        className="rounded-full border border-brand-200 px-2 py-1 text-xs font-semibold text-brand-700"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
             <button
@@ -499,7 +558,9 @@ function Dashboard({ userName }: { userName: string }) {
               onClick={() => uploadMutation.mutate()}
               className="mt-5 rounded-full bg-slate-900 px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
             >
-              {uploadMutation.isPending ? "Uploading..." : "Upload selected assets"}
+              {uploadMutation.isPending
+                ? "Uploading..."
+                : `Upload selected assets (${files.length})`}
             </button>
           </div>
 
@@ -548,6 +609,9 @@ function Dashboard({ userName }: { userName: string }) {
             <div className="mt-6 rounded-3xl bg-slate-950 p-5 text-slate-50">
               <p className="text-sm uppercase tracking-[0.3em] text-sky-200">Secure URL ready</p>
               <p className="mt-3 break-all text-sm text-slate-200">{generatedLink}</p>
+              <p className="mt-2 text-xs text-slate-300">
+                This single URL contains {uploadedAssets.length} ordered asset(s) in one secure bundle.
+              </p>
               <button
                 type="button"
                 onClick={() => navigator.clipboard.writeText(generatedLink)}

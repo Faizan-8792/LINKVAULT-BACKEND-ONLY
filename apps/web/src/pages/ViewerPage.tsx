@@ -1,6 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { AlertTriangle, CheckCircle2, Headphones, Image as ImageIcon, Monitor, PlayCircle, ShieldAlert } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Headphones,
+  Image as ImageIcon,
+  Monitor,
+  PlayCircle,
+  ShieldAlert,
+  Sparkles,
+} from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import type { PublicLinkPayload, SecureAsset } from "@secure-viewer/shared";
 import { api } from "../lib/api";
@@ -31,6 +40,35 @@ export function ViewerPage() {
   const [contentHidden, setContentHidden] = useState(false);
   const [isFinalizing, setIsFinalizing] = useState(false);
   const completedFinalization = useRef(false);
+
+  const reportSuspicious = useCallback(
+    async (eventName: string, customMessage?: string) => {
+      if (!sessionState) {
+        return;
+      }
+
+      setContentHidden(true);
+      try {
+        const response = await api.post("/api/public/report-suspicious", {
+          sessionId: sessionState.sessionId,
+          event: eventName,
+        });
+
+        if (response.data.destroyed) {
+          redirectToDeadLinkPage();
+          return;
+        }
+
+        setSessionState((current) =>
+          current ? { ...current, warningCount: response.data.warningCount } : current,
+        );
+        setWarningOverlay(customMessage ?? response.data.message);
+      } catch {
+        redirectToDeadLinkPage();
+      }
+    },
+    [sessionState],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -67,32 +105,33 @@ export function ViewerPage() {
   useViewerSecurity({
     enabled: Boolean(sessionState),
     fullscreenRequired: Boolean(sessionState?.fullscreenAccepted),
-    onSuspicious: async (eventName) => {
-      if (!sessionState) {
+    onSuspicious: (eventName) => reportSuspicious(eventName),
+  });
+
+  useEffect(() => {
+    if (!sessionState || contentHidden) {
+      return;
+    }
+
+    const onButtonTap = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      const button = target?.closest("button");
+      if (!button) {
         return;
       }
 
-      setContentHidden(true);
-      try {
-        const response = await api.post("/api/public/report-suspicious", {
-          sessionId: sessionState.sessionId,
-          event: eventName,
-        });
-
-        if (response.data.destroyed) {
-          redirectToDeadLinkPage();
-          return;
-        }
-
-        setSessionState((current) =>
-          current ? { ...current, warningCount: response.data.warningCount } : current,
-        );
-        setWarningOverlay(response.data.message);
-      } catch {
-        redirectToDeadLinkPage();
+      if (button.dataset.allowSecureAction === "true") {
+        return;
       }
-    },
-  });
+
+      event.preventDefault();
+      event.stopPropagation();
+      void reportSuspicious("button-tap-attempt", "Not allowed");
+    };
+
+    document.addEventListener("click", onButtonTap, true);
+    return () => document.removeEventListener("click", onButtonTap, true);
+  }, [contentHidden, reportSuspicious, sessionState]);
 
   useEffect(() => {
     const session = sessionState;
@@ -208,15 +247,10 @@ export function ViewerPage() {
           </button>
         </div>
 
-        {validationState.kind === "loading" && <CenteredCard title="Validating secure token" body="Please wait while we verify device rules and link status." />}
+        {validationState.kind === "loading" && <TokenValidationLoader />}
 
         {validationState.kind === "mobile" && (
-          <CenteredCard
-            title="Desktop access required"
-            body={validationState.message}
-            tone="info"
-            footer={validationState.warning}
-          />
+          <MobileBlockedCard message={validationState.message} warning={validationState.warning} />
         )}
 
         {validationState.kind === "ready" && !sessionState && (
@@ -234,13 +268,19 @@ export function ViewerPage() {
                 <InfoChip label="Remaining uses" value={validationState.link.remainingUses} />
                 <InfoChip label="Image timer" value={`${validationState.link.imageDisplaySeconds}s`} />
               </div>
-              <button
+              <motion.button
                 type="button"
                 onClick={openContent}
-                className="mt-8 rounded-2xl bg-brand-600 px-6 py-4 text-base font-semibold text-white shadow-halo"
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                animate={{ scale: [1, 1.03, 1], y: [0, -2, 0] }}
+                transition={{ duration: 1.4, repeat: Infinity }}
+                className="mt-8 inline-flex items-center gap-3 rounded-2xl bg-brand-600 px-6 py-4 text-base font-semibold text-white shadow-halo"
               >
+                <Sparkles className="h-5 w-5" />
                 Tap to open content
-              </button>
+              </motion.button>
+              <p className="mt-3 text-sm font-semibold text-brand-700">Tap once to begin secure viewing</p>
             </div>
 
             <div className="glass-panel soft-ring rounded-[32px] p-8">
@@ -302,6 +342,7 @@ export function ViewerPage() {
                           setWarningOverlay(null);
                           setContentHidden(false);
                         }}
+                        data-allow-secure-action="true"
                         className="mt-4 rounded-full bg-amber-600 px-4 py-2 text-sm font-semibold text-white"
                       >
                         Resume secure viewing
@@ -329,7 +370,9 @@ export function ViewerPage() {
                   src={assetUrl(currentAsset.id)}
                   onOpened={() => markAssetProgress(currentAsset.id, "opened")}
                   onCompleted={() => markAssetProgress(currentAsset.id, "completed")}
-                  onPauseAttempt={() => setWarningOverlay("Pausing is disabled")}
+                  onPauseAttempt={() => {
+                    void reportSuspicious("pause-attempt", "Not allowed");
+                  }}
                 />
               )}
             </div>
@@ -337,6 +380,60 @@ export function ViewerPage() {
         )}
       </div>
     </main>
+  );
+}
+
+function TokenValidationLoader() {
+  return (
+    <section className="glass-panel soft-ring mx-auto max-w-3xl rounded-[36px] p-8 text-center md:p-10">
+      <p className="text-sm font-semibold uppercase tracking-[0.35em] text-brand-700">Secure handshake</p>
+      <h2 className="mt-3 text-3xl font-semibold text-slate-950 md:text-4xl">Validating secure token</h2>
+      <p className="mx-auto mt-4 max-w-2xl leading-7 text-slate-600">
+        Please wait while we verify device rules, token integrity, and secure session eligibility.
+      </p>
+      <div className="mt-8 flex justify-center">
+        <div className="relative flex h-28 w-28 items-center justify-center">
+          <motion.span
+            className="absolute h-28 w-28 rounded-full border-4 border-brand-200"
+            animate={{ scale: [0.9, 1.05, 0.9], opacity: [0.45, 1, 0.45] }}
+            transition={{ duration: 1.6, repeat: Infinity }}
+          />
+          <motion.span
+            className="absolute h-20 w-20 rounded-full border-4 border-brand-400"
+            animate={{ rotate: [0, 360] }}
+            transition={{ duration: 1.2, repeat: Infinity, ease: "linear" }}
+          />
+          <ShieldAlert className="h-9 w-9 text-brand-700" />
+        </div>
+      </div>
+      <div className="mt-8 flex items-end justify-center gap-2">
+        {Array.from({ length: 16 }).map((_, index) => (
+          <motion.span
+            key={index}
+            className="w-1.5 rounded-full bg-brand-500"
+            animate={{ height: [10, 24, 14] }}
+            transition={{ duration: 0.9, repeat: Infinity, delay: index * 0.06 }}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function MobileBlockedCard({ message, warning }: { message: string; warning: string }) {
+  return (
+    <section className="glass-panel soft-ring mx-auto max-w-3xl rounded-[36px] bg-gradient-to-br from-brand-100 via-white to-sky-50 p-6 text-center md:p-10">
+      <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-3xl bg-brand-600 text-white shadow-halo">
+        <Monitor className="h-8 w-8" />
+      </div>
+      <h2 className="mt-5 text-3xl font-semibold text-slate-950 md:text-4xl">Desktop access required</h2>
+      <p className="mx-auto mt-4 max-w-2xl leading-7 text-slate-700">{message}</p>
+      <div className="mt-6 rounded-2xl bg-slate-950 px-5 py-4 text-sm leading-7 text-slate-100">{warning}</div>
+      <div className="mt-6 grid gap-3 text-left sm:grid-cols-2">
+        <div className="rounded-2xl bg-white/80 p-4 text-sm text-slate-700">Open this link on desktop browser only.</div>
+        <div className="rounded-2xl bg-white/80 p-4 text-sm text-slate-700">Avoid tab switching and suspicious interactions.</div>
+      </div>
+    </section>
   );
 }
 

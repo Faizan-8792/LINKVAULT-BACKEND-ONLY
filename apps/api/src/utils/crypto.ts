@@ -6,8 +6,13 @@ export function hashToken(token: string) {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
 
+function issueShortToken(length = 16) {
+  const bytes = Math.max(12, Math.ceil((length * 3) / 4));
+  return crypto.randomBytes(bytes).toString("base64url").slice(0, length);
+}
+
 export function issueLinkToken() {
-  const token = `${crypto.randomUUID()}-${crypto.randomBytes(16).toString("hex")}`;
+  const token = issueShortToken(16);
   return {
     token,
     tokenHash: hashToken(token),

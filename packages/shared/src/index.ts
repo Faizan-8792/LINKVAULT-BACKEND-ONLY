@@ -26,6 +26,8 @@ export const suspiciousEventSchema = z.enum([
   "context-menu",
   "copy-attempt",
   "fullscreen-exit",
+  "pause-attempt",
+  "button-tap-attempt",
   "manual-destroy",
 ]);
 export type SuspiciousEventType = z.infer<typeof suspiciousEventSchema>;
