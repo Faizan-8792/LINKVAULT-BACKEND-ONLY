@@ -11,7 +11,7 @@
     "dev": "concurrently \"npm run dev -w @secure-viewer/api\" \"npm run dev -w @secure-viewer/web\"",
     "dev:api": "npm run dev -w @secure-viewer/api",
     "dev:web": "npm run dev -w @secure-viewer/web",
-    "build": "npm run build -w @secure-viewer/shared && npm run build -w @secure-viewer/api && npm run build -w @secure-viewer/web",
+    "build": "cd packages/shared && npm run build && cd ../../apps/api && npm run build && cd ../web && npm run build",
     "test": "npm run test -w @secure-viewer/shared && npm run test -w @secure-viewer/api && npm run test -w @secure-viewer/web"
   },
   "devDependencies": {
