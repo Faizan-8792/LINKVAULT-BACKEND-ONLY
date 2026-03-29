@@ -1,0 +1,20 @@
+{
+  "name": "secure-ephemeral-content-viewer",
+  "private": true,
+  "version": "1.0.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "postinstall": "npm run build -w @secure-viewer/shared",
+    "dev": "concurrently \"npm run dev -w @secure-viewer/api\" \"npm run dev -w @secure-viewer/web\"",
+    "dev:api": "npm run dev -w @secure-viewer/api",
+    "dev:web": "npm run dev -w @secure-viewer/web",
+    "build": "npm run build -w @secure-viewer/shared && npm run build -w @secure-viewer/api && npm run build -w @secure-viewer/web",
+    "test": "npm run test -w @secure-viewer/shared && npm run test -w @secure-viewer/api && npm run test -w @secure-viewer/web"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

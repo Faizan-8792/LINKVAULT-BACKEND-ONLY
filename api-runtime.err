@@ -1,0 +1,1 @@
+MongoDB is not configured. Add a real MONGODB_URI in apps/api/.env to enable auth, uploads, and secure links.
