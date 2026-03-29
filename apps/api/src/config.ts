@@ -29,6 +29,31 @@ function optional(name: string, fallback?: string) {
   return process.env[name] ?? fallback ?? "";
 }
 
+function normalizeOrigin(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  try {
+    return new URL(trimmed).origin;
+  } catch {
+    return "";
+  }
+}
+
+function parseAllowedOrigins() {
+  const fromClientUrls = optional("CLIENT_URLS")
+    .split(",")
+    .map((entry) => normalizeOrigin(entry))
+    .filter(Boolean);
+
+  const fallbackClientUrl = normalizeOrigin(optional("CLIENT_URL", "http://localhost:5173"));
+  const origins = new Set<string>([...fromClientUrls, fallbackClientUrl]);
+
+  return [...origins];
+}
+
 function normalizeMongoUri(uri: string) {
   const value = uri.trim();
   // Accept the common Atlas copy/paste style where password is still wrapped in angle brackets.
@@ -52,7 +77,8 @@ export const config = {
   mongodbConfigured,
   jwtSecret:
     optional("JWT_SECRET") || (process.env.NODE_ENV === "test" ? "test-jwt-secret" : "change-me"),
-  clientUrl: process.env.CLIENT_URL ?? "http://localhost:5173",
+  clientUrl: normalizeOrigin(optional("CLIENT_URL", "http://localhost:5173")),
+  allowedOrigins: parseAllowedOrigins(),
   uploadRoot: path.resolve(process.cwd(), process.env.UPLOAD_ROOT ?? "uploads"),
   streamTokenSecret:
     optional("STREAM_TOKEN_SECRET") ||

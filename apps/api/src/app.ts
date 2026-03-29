@@ -9,14 +9,14 @@ import { publicRouter } from "./routes/public.js";
 
 export function createApp() {
   const app = express();
-  const configuredOrigin = new URL(config.clientUrl).origin;
+  const allowedOrigins = new Set(config.allowedOrigins);
 
   function isAllowedOrigin(origin?: string) {
     if (!origin) {
       return true;
     }
 
-    if (origin === configuredOrigin) {
+    if (allowedOrigins.has(origin)) {
       return true;
     }
 
