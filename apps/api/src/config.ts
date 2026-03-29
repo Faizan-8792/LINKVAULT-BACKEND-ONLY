@@ -26,6 +26,7 @@ function loadEnv() {
 loadEnv();
 
 const defaultClientOrigin = "https://linkvaulthelp.netlify.app";
+const defaultViewerOrigin = "https://share.livevault.live";
 const defaultLocalOrigin = "http://localhost:5173";
 
 function optional(name: string, fallback?: string) {
@@ -54,6 +55,7 @@ function parseAllowedOrigins() {
   const fallbackClientUrl = normalizeOrigin(optional("CLIENT_URL", defaultClientOrigin));
   const origins = new Set<string>([
     defaultClientOrigin,
+    defaultViewerOrigin,
     defaultLocalOrigin,
     ...fromClientUrls,
     fallbackClientUrl,
@@ -86,6 +88,7 @@ export const config = {
   jwtSecret:
     optional("JWT_SECRET") || (process.env.NODE_ENV === "test" ? "test-jwt-secret" : "change-me"),
   clientUrl: normalizeOrigin(optional("CLIENT_URL", defaultClientOrigin)),
+  viewerUrl: normalizeOrigin(optional("VIEWER_URL", defaultViewerOrigin)),
   allowedOrigins: parseAllowedOrigins(),
   uploadRoot: path.resolve(process.cwd(), process.env.UPLOAD_ROOT ?? "uploads"),
   streamTokenSecret:

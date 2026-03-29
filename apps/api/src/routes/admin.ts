@@ -121,7 +121,7 @@ adminRouter.post(
       ...body,
       assets,
       createdBy: req.user!.id,
-      clientUrl: config.clientUrl,
+      clientUrl: config.viewerUrl,
     });
 
     return res.status(201).json({ ...link, warning: limitationCopy });
