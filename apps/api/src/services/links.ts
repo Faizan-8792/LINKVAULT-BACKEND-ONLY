@@ -217,7 +217,6 @@ export async function startViewerSession(token: string, req: Request, fullscreen
     return { status: 409 as const, payload: { message: "A secure session is already active" } };
   }
 
-  link.usesConsumed += 1;
   link.desktopOpenCount += 1;
   await link.save();
 
@@ -360,6 +359,7 @@ export async function finalizeSession(sessionId: string) {
   session.endedAt = new Date();
   await session.save();
 
+  link.usesConsumed += 1;
   const hasRemainingUses = link.usesConsumed < link.maxUses;
   if (hasRemainingUses) {
     link.status = "active";
@@ -417,14 +417,14 @@ export async function reportSuspiciousEvent(input: { sessionId: string; event: s
     session.endedAt = new Date();
     await session.save();
 
-    link.status = "destroyed";
-    link.expiredAt = new Date();
-    scheduleCleanup(link);
-    await link.save();
-
     return {
       status: 200 as const,
-      payload: { destroyed: true, message: "This link has expired", warningCount: session.warningCount },
+      payload: {
+        destroyed: false,
+        sessionEnded: true,
+        message: "Session closed due to repeated restricted actions. Reopen the link to continue.",
+        warningCount: session.warningCount,
+      },
     };
   }
 

@@ -16,7 +16,7 @@ import { api } from "../lib/api";
 
 type ValidationState =
   | { kind: "loading" }
-  | { kind: "mobile"; message: string; warning: string }
+  | { kind: "mobile"; message: string }
   | { kind: "ready"; link: PublicLinkPayload };
 
 type SessionState = {
@@ -54,6 +54,13 @@ export function ViewerPage() {
           event: eventName,
         });
 
+        if (response.data.sessionEnded) {
+          setSessionState(null);
+          setWarningOverlay(response.data.message);
+          setContentHidden(false);
+          return;
+        }
+
         if (response.data.destroyed) {
           redirectToDeadLinkPage();
           return;
@@ -84,7 +91,6 @@ export function ViewerPage() {
           setValidationState({
             kind: "mobile",
             message: response.data.message,
-            warning: response.data.warning,
           });
           return;
         }
@@ -250,7 +256,7 @@ export function ViewerPage() {
         {validationState.kind === "loading" && <TokenValidationLoader />}
 
         {validationState.kind === "mobile" && (
-          <MobileBlockedCard message={validationState.message} warning={validationState.warning} />
+          <MobileBlockedCard message={validationState.message} />
         )}
 
         {validationState.kind === "ready" && !sessionState && (
@@ -420,7 +426,7 @@ function TokenValidationLoader() {
   );
 }
 
-function MobileBlockedCard({ message, warning }: { message: string; warning: string }) {
+function MobileBlockedCard({ message }: { message: string }) {
   return (
     <section className="glass-panel soft-ring mx-auto max-w-3xl rounded-[36px] bg-gradient-to-br from-brand-100 via-white to-sky-50 p-6 text-center md:p-10">
       <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-3xl bg-brand-600 text-white shadow-halo">
@@ -428,7 +434,6 @@ function MobileBlockedCard({ message, warning }: { message: string; warning: str
       </div>
       <h2 className="mt-5 text-3xl font-semibold text-slate-950 md:text-4xl">Desktop access required</h2>
       <p className="mx-auto mt-4 max-w-2xl leading-7 text-slate-700">{message}</p>
-      <div className="mt-6 rounded-2xl bg-slate-950 px-5 py-4 text-sm leading-7 text-slate-100">{warning}</div>
       <div className="mt-6 grid gap-3 text-left sm:grid-cols-2">
         <div className="rounded-2xl bg-white/80 p-4 text-sm text-slate-700">Open this link on desktop browser only.</div>
         <div className="rounded-2xl bg-white/80 p-4 text-sm text-slate-700">Avoid tab switching and suspicious interactions.</div>

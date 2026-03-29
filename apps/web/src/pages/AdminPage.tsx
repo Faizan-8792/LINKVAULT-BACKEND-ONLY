@@ -317,10 +317,10 @@ function Dashboard({ userName }: { userName: string }) {
     },
     onSuccess(assets) {
       setUploadedAssets((current) =>
-        [...current, ...assets].map((asset, index) => ({
-          ...asset,
-          order: index,
-        })),
+        applyDefaultAssetOrder([
+          ...current,
+          ...assets.map((asset, index) => ({ ...asset, order: current.length + index })),
+        ]),
       );
       setFiles([]);
     },
@@ -371,6 +371,24 @@ function Dashboard({ userName }: { userName: string }) {
       mobileOpens: links.reduce((sum, link) => sum + link.mobileOpenCount, 0),
     };
   }, [linksQuery.data]);
+
+  function applyDefaultAssetOrder(assets: UploadedAsset[]) {
+    const typeRank: Record<UploadedAsset["type"], number> = {
+      image: 0,
+      audio: 1,
+      video: 2,
+    };
+
+    return [...assets]
+      .sort((left, right) => {
+        const byType = typeRank[left.type] - typeRank[right.type];
+        if (byType !== 0) {
+          return byType;
+        }
+        return left.order - right.order;
+      })
+      .map((asset, order) => ({ ...asset, order }));
+  }
 
   function moveAsset(index: number, direction: -1 | 1) {
     setUploadedAssets((current) => {
