@@ -45,6 +45,14 @@ export function createApp() {
   app.use(express.json({ limit: "20mb" }));
   app.use(express.urlencoded({ extended: true }));
 
+  app.get("/", (_req, res) => {
+    res.json({
+      ok: true,
+      service: "LinkVault backend",
+      health: "/api/health",
+    });
+  });
+
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true, database: getDatabaseStatus() });
   });
