@@ -23,7 +23,7 @@ This system cannot fully prevent screenshots, screen recording, or content extra
 
 1. Copy `.env.example` to `.env` in `apps/api` and `apps/web`.
 2. Add a real `MONGODB_URI` with your database password.
-3. For production deployments, set `VITE_API_URL=https://linkvault-backend-only.onrender.com` in `apps/web`, set `VIEWER_URL=https://share.livevault.live` in `apps/api`, and set `CLIENT_URLS=https://linkvaulthelp.netlify.app,https://share.livevault.live,http://localhost:5173` in `apps/api`.
+3. For production deployments, set `VITE_API_URL=https://linkvault-backend-only.onrender.com` in `apps/web`, set `VIEWER_URL=https://share.livevault.live` in `apps/api`, and set `CLIENT_URLS=https://livevault.live,https://vaultlive.live,https://share.livevault.live,http://localhost:5173` in `apps/api`.
 4. Install dependencies:
 
 ```bash

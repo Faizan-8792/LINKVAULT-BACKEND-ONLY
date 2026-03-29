@@ -11,6 +11,20 @@ export function createApp() {
   const app = express();
   const allowedOrigins = new Set(config.allowedOrigins);
 
+  function matchesTrustedHost(origin: string) {
+    try {
+      const { protocol, hostname } = new URL(origin);
+      if (!/^https?:$/i.test(protocol)) {
+        return false;
+      }
+
+      const trustedHosts = ["livevault.live", "vaultlive.live"];
+      return trustedHosts.some((trustedHost) => hostname === trustedHost || hostname.endsWith(`.${trustedHost}`));
+    } catch {
+      return false;
+    }
+  }
+
   function isAllowedOrigin(origin?: string) {
     if (!origin) {
       return true;
@@ -22,6 +36,10 @@ export function createApp() {
 
     // Support common local-dev origins (localhost, 127.0.0.1, LAN IPs) with any port.
     if (/^https?:\/\/(localhost|127\.0\.0\.1|\d{1,3}(\.\d{1,3}){3})(:\d+)?$/i.test(origin)) {
+      return true;
+    }
+
+    if (matchesTrustedHost(origin)) {
       return true;
     }
 

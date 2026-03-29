@@ -25,7 +25,8 @@ function loadEnv() {
 
 loadEnv();
 
-const defaultClientOrigin = "https://linkvaulthelp.netlify.app";
+const defaultClientOrigin = "https://livevault.live";
+const defaultClientAliasOrigin = "https://vaultlive.live";
 const defaultViewerOrigin = "https://share.livevault.live";
 const defaultLocalOrigin = "http://localhost:5173";
 
@@ -55,6 +56,7 @@ function parseAllowedOrigins() {
   const fallbackClientUrl = normalizeOrigin(optional("CLIENT_URL", defaultClientOrigin));
   const origins = new Set<string>([
     defaultClientOrigin,
+    defaultClientAliasOrigin,
     defaultViewerOrigin,
     defaultLocalOrigin,
     ...fromClientUrls,
