@@ -25,6 +25,9 @@ function loadEnv() {
 
 loadEnv();
 
+const defaultClientOrigin = "https://linkvaulthelp.netlify.app";
+const defaultLocalOrigin = "http://localhost:5173";
+
 function optional(name: string, fallback?: string) {
   return process.env[name] ?? fallback ?? "";
 }
@@ -48,8 +51,13 @@ function parseAllowedOrigins() {
     .map((entry) => normalizeOrigin(entry))
     .filter(Boolean);
 
-  const fallbackClientUrl = normalizeOrigin(optional("CLIENT_URL", "http://localhost:5173"));
-  const origins = new Set<string>([...fromClientUrls, fallbackClientUrl]);
+  const fallbackClientUrl = normalizeOrigin(optional("CLIENT_URL", defaultClientOrigin));
+  const origins = new Set<string>([
+    defaultClientOrigin,
+    defaultLocalOrigin,
+    ...fromClientUrls,
+    fallbackClientUrl,
+  ]);
 
   return [...origins];
 }
@@ -77,7 +85,7 @@ export const config = {
   mongodbConfigured,
   jwtSecret:
     optional("JWT_SECRET") || (process.env.NODE_ENV === "test" ? "test-jwt-secret" : "change-me"),
-  clientUrl: normalizeOrigin(optional("CLIENT_URL", "http://localhost:5173")),
+  clientUrl: normalizeOrigin(optional("CLIENT_URL", defaultClientOrigin)),
   allowedOrigins: parseAllowedOrigins(),
   uploadRoot: path.resolve(process.cwd(), process.env.UPLOAD_ROOT ?? "uploads"),
   streamTokenSecret:
