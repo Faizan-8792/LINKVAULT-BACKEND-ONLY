@@ -13,6 +13,7 @@ import {
 import { useNavigate, useParams } from "react-router-dom";
 import type { PublicLinkPayload, SecureAsset } from "@secure-viewer/shared";
 import { api } from "../lib/api";
+import { getViewerDeviceContext } from "../lib/deviceContext";
 
 type ValidationState =
   | { kind: "loading" }
@@ -95,7 +96,10 @@ export function ViewerPage() {
 
     async function validate() {
       try {
-        const response = await api.post("/api/public/validate-link", { token });
+        const response = await api.post("/api/public/validate-link", {
+          token,
+          deviceContext: getViewerDeviceContext(),
+        });
         if (cancelled) {
           return;
         }
@@ -210,6 +214,7 @@ export function ViewerPage() {
       const response = await api.post("/api/public/start-session", {
         token,
         fullscreenAccepted,
+        deviceContext: getViewerDeviceContext(),
       });
 
       setSessionState({ ...response.data, fullscreenAccepted });

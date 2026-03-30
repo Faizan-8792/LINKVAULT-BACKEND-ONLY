@@ -31,7 +31,7 @@ publicRouter.post(
   "/validate-link",
   asyncHandler(async (req, res) => {
     const body = validateLinkSchema.parse(req.body);
-    const result = await validatePublicLink(body.token, req);
+    const result = await validatePublicLink(body.token, req, body.deviceContext);
     return res.status(result.status).json(result.payload);
   }),
 );
@@ -40,7 +40,12 @@ publicRouter.post(
   "/start-session",
   asyncHandler(async (req, res) => {
     const body = startSessionSchema.parse(req.body);
-    const result = await startViewerSession(body.token, req, body.fullscreenAccepted);
+    const result = await startViewerSession(
+      body.token,
+      req,
+      body.fullscreenAccepted,
+      body.deviceContext,
+    );
     return res.status(result.status).json(result.payload);
   }),
 );

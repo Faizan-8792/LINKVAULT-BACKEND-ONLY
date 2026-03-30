@@ -18,6 +18,20 @@ export type LinkStatus = z.infer<typeof linkStatusSchema>;
 export const deviceTypeSchema = z.enum(["desktop", "mobile", "tablet", "unknown"]);
 export type DeviceType = z.infer<typeof deviceTypeSchema>;
 
+export const viewerDeviceContextSchema = z.object({
+  userAgent: z.string().trim().max(512).optional(),
+  platform: z.string().trim().max(128).optional(),
+  maxTouchPoints: z.number().int().min(0).max(32).optional(),
+  hoverCapable: z.boolean().optional(),
+  coarsePointer: z.boolean().optional(),
+  viewportWidth: z.number().int().min(0).max(10000).optional(),
+  viewportHeight: z.number().int().min(0).max(10000).optional(),
+  screenWidth: z.number().int().min(0).max(10000).optional(),
+  screenHeight: z.number().int().min(0).max(10000).optional(),
+  uaMobile: z.boolean().optional(),
+});
+export type ViewerDeviceContext = z.infer<typeof viewerDeviceContextSchema>;
+
 export const suspiciousEventSchema = z.enum([
   "printscreen",
   "devtools-shortcut",
@@ -68,12 +82,14 @@ export type LoginInput = z.infer<typeof loginSchema>;
 
 export const validateLinkSchema = z.object({
   token: z.string().min(12),
+  deviceContext: viewerDeviceContextSchema.optional(),
 });
 export type ValidateLinkInput = z.infer<typeof validateLinkSchema>;
 
 export const startSessionSchema = z.object({
   token: z.string().min(12),
   fullscreenAccepted: z.boolean().optional(),
+  deviceContext: viewerDeviceContextSchema.optional(),
 });
 export type StartSessionInput = z.infer<typeof startSessionSchema>;
 

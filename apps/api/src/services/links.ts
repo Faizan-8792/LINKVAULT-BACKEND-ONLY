@@ -5,6 +5,7 @@ import {
   type DeviceType,
   type PublicLinkPayload,
   type PublicSessionPayload,
+  type ViewerDeviceContext,
 } from "@secure-viewer/shared";
 import { SecureLinkModel, type SecureLinkDocument } from "../models/SecureLink.js";
 import { ViewerSessionModel } from "../models/ViewerSession.js";
@@ -123,12 +124,16 @@ export function getLinkPayload(link: SecureLinkDocument): PublicLinkPayload {
   };
 }
 
-export function resolveDevice(req: Request): DeviceType {
-  return detectDeviceType(req.headers["user-agent"]);
+export function resolveDevice(req: Request, deviceContext?: ViewerDeviceContext): DeviceType {
+  return detectDeviceType(req.headers["user-agent"], deviceContext);
 }
 
-export async function validatePublicLink(token: string, req: Request) {
-  const deviceType = resolveDevice(req);
+export async function validatePublicLink(
+  token: string,
+  req: Request,
+  deviceContext?: ViewerDeviceContext,
+) {
+  const deviceType = resolveDevice(req, deviceContext);
   const link = await findLinkByToken(token);
 
   if (!link) {
@@ -188,8 +193,13 @@ export async function ensureNoActiveDesktopSession(linkId: string) {
   });
 }
 
-export async function startViewerSession(token: string, req: Request, fullscreenAccepted = false) {
-  const deviceType = resolveDevice(req);
+export async function startViewerSession(
+  token: string,
+  req: Request,
+  fullscreenAccepted = false,
+  deviceContext?: ViewerDeviceContext,
+) {
+  const deviceType = resolveDevice(req, deviceContext);
   const link = await findLinkByToken(token);
 
   if (!link) {
