@@ -39,7 +39,20 @@ export function ViewerPage() {
   const [warningOverlay, setWarningOverlay] = useState<string | null>(null);
   const [contentHidden, setContentHidden] = useState(false);
   const [isFinalizing, setIsFinalizing] = useState(false);
+  const [isOpeningContent, setIsOpeningContent] = useState(false);
+  const [isHoverCountdownActive, setIsHoverCountdownActive] = useState(false);
   const completedFinalization = useRef(false);
+  const hoverOpenTimerRef = useRef<number | null>(null);
+  const sessionStateRef = useRef<SessionState | null>(null);
+  const isOpeningContentRef = useRef(false);
+
+  const cancelHoverOpenCountdown = useCallback(() => {
+    if (hoverOpenTimerRef.current !== null) {
+      window.clearTimeout(hoverOpenTimerRef.current);
+      hoverOpenTimerRef.current = null;
+    }
+    setIsHoverCountdownActive(false);
+  }, []);
 
   const reportSuspicious = useCallback(
     async (eventName: string, customMessage?: string) => {
@@ -107,6 +120,16 @@ export function ViewerPage() {
       cancelled = true;
     };
   }, [token]);
+
+  useEffect(() => {
+    sessionStateRef.current = sessionState;
+  }, [sessionState]);
+
+  useEffect(() => {
+    isOpeningContentRef.current = isOpeningContent;
+  }, [isOpeningContent]);
+
+  useEffect(() => cancelHoverOpenCountdown, [cancelHoverOpenCountdown]);
 
   useViewerSecurity({
     enabled: Boolean(sessionState),
@@ -181,7 +204,7 @@ export function ViewerPage() {
     window.location.replace(DEAD_LINK_REDIRECT_URL);
   }
 
-  async function openContent() {
+  const openContent = useCallback(async () => {
     try {
       const fullscreenAccepted = await requestFullscreenBestEffort();
       const response = await api.post("/api/public/start-session", {
@@ -200,7 +223,34 @@ export function ViewerPage() {
       }
       setWarningOverlay(message || "Unable to open content right now.");
     }
-  }
+  }, [token]);
+
+  const triggerOpenContent = useCallback(() => {
+    if (isOpeningContentRef.current || sessionStateRef.current) {
+      return;
+    }
+
+    cancelHoverOpenCountdown();
+    isOpeningContentRef.current = true;
+    setIsOpeningContent(true);
+    void openContent().finally(() => {
+      isOpeningContentRef.current = false;
+      setIsOpeningContent(false);
+    });
+  }, [cancelHoverOpenCountdown, openContent]);
+
+  const startHoverOpenCountdown = useCallback(() => {
+    if (isOpeningContentRef.current || sessionStateRef.current || hoverOpenTimerRef.current !== null) {
+      return;
+    }
+
+    setIsHoverCountdownActive(true);
+    hoverOpenTimerRef.current = window.setTimeout(() => {
+      hoverOpenTimerRef.current = null;
+      setIsHoverCountdownActive(false);
+      triggerOpenContent();
+    }, 2000);
+  }, [triggerOpenContent]);
 
   async function markAssetProgress(assetId: string, event: "opened" | "completed") {
     if (!sessionState) {
@@ -267,7 +317,7 @@ export function ViewerPage() {
                 Content ready for {validationState.link.recipientName}
               </h2>
               <p className="mt-4 leading-7 text-slate-600">
-                Tap the content button to open directly in fullscreen mode.
+                Hover on the content button for 2 seconds to open in secure viewer mode.
               </p>
               <div className="mt-8 grid gap-4 md:grid-cols-3">
                 <InfoChip label="Assets" value={validationState.link.assets.length} />
@@ -276,17 +326,25 @@ export function ViewerPage() {
               </div>
               <motion.button
                 type="button"
-                onClick={openContent}
+                onMouseEnter={startHoverOpenCountdown}
+                onMouseLeave={cancelHoverOpenCountdown}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    triggerOpenContent();
+                  }
+                }}
                 whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
                 animate={{ scale: [1, 1.03, 1], y: [0, -2, 0] }}
                 transition={{ duration: 1.4, repeat: Infinity }}
                 className="mt-8 inline-flex items-center gap-3 rounded-2xl bg-brand-600 px-6 py-4 text-base font-semibold text-white shadow-halo"
               >
                 <Sparkles className="h-5 w-5" />
-                Tap to open content
+                {isHoverCountdownActive ? "Hovering... opening soon" : "Hover for 2s to open content"}
               </motion.button>
-              <p className="mt-3 text-sm font-semibold text-brand-700">Tap once to begin secure viewing</p>
+              <p className="mt-3 text-sm font-semibold text-brand-700">
+                {isHoverCountdownActive ? "Keep hovering to begin secure viewing" : "Hover and hold for 2 seconds to begin secure viewing"}
+              </p>
             </div>
 
             <div className="glass-panel soft-ring rounded-[32px] p-8">
