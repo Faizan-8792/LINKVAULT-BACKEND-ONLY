@@ -475,34 +475,59 @@ export function ViewerPage() {
 
 function TokenValidationLoader() {
   return (
-    <section className="glass-panel soft-ring mx-auto max-w-3xl rounded-[36px] p-8 text-center md:p-10">
+    <section className="glass-panel soft-ring mx-auto max-w-3xl overflow-hidden rounded-[36px] border border-white/70 bg-gradient-to-br from-white via-sky-50 to-brand-100 p-8 text-center md:p-10">
       <p className="text-sm font-semibold uppercase tracking-[0.35em] text-brand-700">Secure handshake</p>
       <h2 className="mt-3 text-3xl font-semibold text-slate-950 md:text-4xl">Validating secure token</h2>
       <p className="mx-auto mt-4 max-w-2xl leading-7 text-slate-600">
-        Please wait while we verify device rules, token integrity, and secure session eligibility.
+        Preparing encrypted desktop access, integrity checks, and secure playback constraints.
       </p>
-      <div className="mt-8 flex justify-center">
-        <div className="relative flex h-28 w-28 items-center justify-center">
-          <motion.span
-            className="absolute h-28 w-28 rounded-full border-4 border-brand-200"
-            animate={{ scale: [0.9, 1.05, 0.9], opacity: [0.45, 1, 0.45] }}
-            transition={{ duration: 1.6, repeat: Infinity }}
-          />
-          <motion.span
-            className="absolute h-20 w-20 rounded-full border-4 border-brand-400"
+
+      <div className="relative mt-10 flex justify-center">
+        <motion.div
+          className="absolute h-40 w-40 rounded-full bg-brand-300/30 blur-3xl"
+          animate={{ scale: [0.9, 1.15, 0.9], opacity: [0.35, 0.7, 0.35] }}
+          transition={{ duration: 2.1, repeat: Infinity }}
+        />
+        <div className="relative flex h-44 w-44 items-center justify-center">
+          <motion.div
+            className="absolute inset-0 rounded-full bg-[conic-gradient(from_0deg,#38bdf8,#4f46e5,#14b8a6,#38bdf8)] opacity-80"
             animate={{ rotate: [0, 360] }}
-            transition={{ duration: 1.2, repeat: Infinity, ease: "linear" }}
+            transition={{ duration: 2.4, ease: "linear", repeat: Infinity }}
           />
-          <ShieldAlert className="h-9 w-9 text-brand-700" />
+          <motion.div
+            className="absolute inset-3 rounded-full bg-white/85 backdrop-blur"
+            animate={{ scale: [1, 0.96, 1] }}
+            transition={{ duration: 1.8, repeat: Infinity }}
+          />
+          <motion.div
+            className="absolute inset-[26%] flex items-center justify-center rounded-full bg-slate-950 text-sky-200 shadow-2xl"
+            animate={{ y: [0, -3, 0] }}
+            transition={{ duration: 1.7, repeat: Infinity }}
+          >
+            <ShieldAlert className="h-10 w-10" />
+          </motion.div>
+          <motion.span
+            className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 rounded-full bg-sky-300"
+            animate={{ rotate: [0, 360] }}
+            style={{ transformOrigin: "84px 0px" }}
+            transition={{ duration: 1.9, ease: "linear", repeat: Infinity }}
+          />
+          <motion.span
+            className="absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 rounded-full bg-brand-400"
+            animate={{ rotate: [360, 0] }}
+            style={{ transformOrigin: "-84px 0px" }}
+            transition={{ duration: 2.4, ease: "linear", repeat: Infinity }}
+          />
         </div>
       </div>
-      <div className="mt-8 flex items-end justify-center gap-2">
-        {Array.from({ length: 16 }).map((_, index) => (
+
+      <div className="mx-auto mt-8 grid max-w-xl grid-cols-10 gap-2">
+        {Array.from({ length: 20 }).map((_, index) => (
           <motion.span
             key={index}
-            className="w-1.5 rounded-full bg-brand-500"
-            animate={{ height: [10, 24, 14] }}
-            transition={{ duration: 0.9, repeat: Infinity, delay: index * 0.06 }}
+            className="h-1.5 rounded-full bg-gradient-to-r from-brand-500 to-sky-400"
+            animate={{ opacity: [0.25, 1, 0.25], scaleX: [0.8, 1.15, 0.8] }}
+            transition={{ duration: 1.1, repeat: Infinity, delay: index * 0.05 }}
           />
         ))}
       </div>
