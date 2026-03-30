@@ -32,6 +32,9 @@ export const viewerDeviceContextSchema = z.object({
 });
 export type ViewerDeviceContext = z.infer<typeof viewerDeviceContextSchema>;
 
+export const mobileReplacementKindSchema = z.enum(["issued", "permanent-expired"]);
+export type MobileReplacementKind = z.infer<typeof mobileReplacementKindSchema>;
+
 export const suspiciousEventSchema = z.enum([
   "printscreen",
   "devtools-shortcut",
@@ -129,6 +132,16 @@ export type PublicLinkPayload = {
   status: LinkStatus;
   assets: SecureAsset[];
   warning: string;
+};
+
+export type PublicMobilePayload = {
+  deviceType: DeviceType;
+  mode: "mobile";
+  message: string;
+  warning: string;
+  currentLinkExpired: boolean;
+  replacementKind: MobileReplacementKind;
+  replacementUrl?: string;
 };
 
 export type AuthUser = {

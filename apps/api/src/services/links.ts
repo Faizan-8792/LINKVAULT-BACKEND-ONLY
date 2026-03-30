@@ -3,10 +3,12 @@ import {
   interpolateMobileMessage,
   limitationCopy,
   type DeviceType,
+  type PublicMobilePayload,
   type PublicLinkPayload,
   type PublicSessionPayload,
   type ViewerDeviceContext,
 } from "@secure-viewer/shared";
+import { config } from "../config.js";
 import { SecureLinkModel, type SecureLinkDocument } from "../models/SecureLink.js";
 import { ViewerSessionModel } from "../models/ViewerSession.js";
 import { storageProvider } from "../storage/storage.js";
@@ -56,6 +58,8 @@ export async function createSecureLink(input: {
   imageDisplaySeconds: number;
   maxUses: number;
   autoDeleteDelaySeconds: number;
+  warningMessage?: string;
+  replacementParentId?: string | null;
   assets: Array<{
     id: string;
     type: "image" | "video" | "audio";
@@ -87,8 +91,9 @@ export async function createSecureLink(input: {
       storageKey: asset.storageKey,
     })),
     createdBy: input.createdBy,
+    replacementParentId: input.replacementParentId ?? null,
     autoDeleteDelaySeconds: input.autoDeleteDelaySeconds,
-    warningMessage: limitationCopy,
+    warningMessage: input.warningMessage ?? limitationCopy,
   });
 
   return {
@@ -124,6 +129,125 @@ export function getLinkPayload(link: SecureLinkDocument): PublicLinkPayload {
   };
 }
 
+type MobileBlockResult = {
+  status: 200;
+  payload: PublicMobilePayload;
+};
+
+function mapAssetsForReplacement(link: SecureLinkDocument) {
+  return sortAssets(link.assets as unknown as LinkAssetRecord[]).map((asset) => ({
+    id: asset.assetId,
+    type: asset.type,
+    originalName: asset.originalName,
+    mimeType: asset.mimeType,
+    durationSeconds: asset.durationSeconds ?? null,
+    order: asset.order,
+    storageKey: asset.storageKey,
+  }));
+}
+
+function buildMobileIssuedMessage(link: SecureLinkDocument) {
+  const base = interpolateMobileMessage(link.mobileMessageTemplate, link.recipientName);
+  return `${base}. Current link expired due to mobile access. Open the replacement URL on desktop only.`;
+}
+
+function buildMobilePermanentMessage(link: SecureLinkDocument) {
+  const base = interpolateMobileMessage(link.mobileMessageTemplate, link.recipientName);
+  return `${base}. This link is now permanently expired due to mobile access.`;
+}
+
+async function handleNonDesktopOpen(
+  link: SecureLinkDocument,
+  deviceType: DeviceType,
+): Promise<MobileBlockResult> {
+  link.lastDeviceType = deviceType;
+  link.mobileOpenCount += 1;
+  link.status = "expired";
+  link.expiredAt = new Date();
+  scheduleCleanup(link);
+
+  const warning = link.warningMessage ?? limitationCopy;
+  const remainingUses = Math.max(0, link.maxUses - link.usesConsumed);
+  const isReplacementChild = Boolean(link.replacementParentId);
+
+  await link.save();
+
+  if (isReplacementChild || link.replacementChildId || remainingUses <= 0) {
+    await recordAuditEvent({
+      linkId: String(link._id),
+      type: "mobile-open-expired",
+      message: "Link expired after mobile access",
+      metadata: { deviceType, replacementIssued: false },
+    });
+    return {
+      status: 200,
+      payload: {
+        deviceType,
+        mode: "mobile",
+        message: buildMobilePermanentMessage(link),
+        warning,
+        currentLinkExpired: true,
+        replacementKind: "permanent-expired",
+      },
+    };
+  }
+
+  try {
+    const replacement = await createSecureLink({
+      recipientName: link.recipientName,
+      mobileMessageTemplate: link.mobileMessageTemplate,
+      imageDisplaySeconds: link.imageDisplaySeconds,
+      maxUses: remainingUses,
+      autoDeleteDelaySeconds: link.autoDeleteDelaySeconds,
+      warningMessage: warning,
+      replacementParentId: String(link._id),
+      assets: mapAssetsForReplacement(link),
+      createdBy: String(link.createdBy),
+      clientUrl: config.viewerUrl,
+    });
+
+    link.replacementChildId = replacement.linkId as any;
+    await link.save();
+    await recordAuditEvent({
+      linkId: String(link._id),
+      type: "mobile-replacement-issued",
+      message: "Replacement link issued after mobile access",
+      metadata: { deviceType, replacementLinkId: replacement.linkId },
+    });
+
+    return {
+      status: 200,
+      payload: {
+        deviceType,
+        mode: "mobile",
+        message: buildMobileIssuedMessage(link),
+        warning,
+        currentLinkExpired: true,
+        replacementKind: "issued",
+        replacementUrl: replacement.viewerUrl,
+      },
+    };
+  } catch {
+    await recordAuditEvent({
+      linkId: String(link._id),
+      type: "mobile-replacement-failed",
+      message: "Replacement link could not be created after mobile access",
+      metadata: { deviceType },
+    });
+    return {
+      status: 200,
+      payload: {
+        deviceType,
+        mode: "mobile",
+        message: buildMobilePermanentMessage(link),
+        warning,
+        currentLinkExpired: true,
+        replacementKind: "permanent-expired",
+      },
+    };
+  }
+}
+
 export function resolveDevice(req: Request, deviceContext?: ViewerDeviceContext): DeviceType {
   return detectDeviceType(req.headers["user-agent"], deviceContext);
 }
@@ -152,28 +276,11 @@ export async function validatePublicLink(
     return { status: 410 as const, payload: { message: "This link has expired" } };
   }
 
-  link.lastDeviceType = deviceType;
-
   if (deviceType !== "desktop") {
-    link.mobileOpenCount += 1;
-    await link.save();
-    await recordAuditEvent({
-      linkId: String(link._id),
-      type: "mobile-open",
-      message: "Link opened on a non-desktop device",
-      metadata: { deviceType },
-    });
-    return {
-      status: 200 as const,
-      payload: {
-        deviceType,
-        mode: "mobile",
-        message: interpolateMobileMessage(link.mobileMessageTemplate, link.recipientName),
-        warning: link.warningMessage ?? limitationCopy,
-      },
-    };
+    return handleNonDesktopOpen(link, deviceType);
   }
 
+  link.lastDeviceType = deviceType;
   await link.save();
 
   return {
@@ -206,10 +313,6 @@ export async function startViewerSession(
     return { status: 404 as const, payload: { message: "This link has expired" } };
   }
 
-  if (deviceType !== "desktop") {
-    return { status: 400 as const, payload: { message: "Desktop access is required" } };
-  }
-
   if (["expired", "destroyed", "consumed"].includes(link.status)) {
     return { status: 410 as const, payload: { message: "This link has expired" } };
   }
@@ -220,6 +323,10 @@ export async function startViewerSession(
     scheduleCleanup(link);
     await link.save();
     return { status: 410 as const, payload: { message: "This link has expired" } };
+  }
+
+  if (deviceType !== "desktop") {
+    return handleNonDesktopOpen(link, deviceType);
   }
 
   const activeSession = await ensureNoActiveDesktopSession(String(link._id));
@@ -483,6 +590,16 @@ export async function destroySessionOrLink(input: { sessionId?: string; token?: 
   return { status: 200 as const, payload: { message: "This link has expired" } };
 }
 
+export async function removeAssetIfUnreferenced(storageKey: string, currentLinkId: string) {
+  const referencedElsewhere = await SecureLinkModel.exists({
+    _id: { $ne: currentLinkId },
+    "assets.storageKey": storageKey,
+  });
+  if (!referencedElsewhere) {
+    await storageProvider.remove(storageKey);
+  }
+}
+
 export async function removeExpiredLinksAndMedia() {
   const links = await SecureLinkModel.find({
     cleanupAt: { $lte: new Date() },
@@ -490,7 +607,7 @@ export async function removeExpiredLinksAndMedia() {
 
   for (const link of links) {
     for (const asset of link.assets) {
-      await storageProvider.remove(asset.storageKey);
+      await removeAssetIfUnreferenced(asset.storageKey, String(link._id));
     }
 
     await ViewerSessionModel.deleteMany({ linkId: link._id });

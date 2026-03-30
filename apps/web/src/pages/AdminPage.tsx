@@ -36,6 +36,8 @@ type LinkItem = {
   usesConsumed: number;
   mobileOpenCount: number;
   desktopOpenCount: number;
+  replacementParentId: string | null;
+  replacementChildId: string | null;
   createdAt: string;
   expiredAt: string | null;
   assetCount: number;
@@ -367,7 +369,7 @@ function Dashboard({ userName }: { userName: string }) {
     return {
       totalLinks: links.length,
       activeLinks: links.filter((link) => link.status === "active").length,
-      expiredLinks: links.filter((link) => ["expired", "destroyed", "consumed"].includes(link.status)).length,
+      expiredLinks: links.filter((link) => ["expired", "destroyed"].includes(link.status)).length,
       mobileOpens: links.reduce((sum, link) => sum + link.mobileOpenCount, 0),
     };
   }, [linksQuery.data]);
@@ -659,6 +661,16 @@ function Dashboard({ userName }: { userName: string }) {
                       <p className="mt-1 text-sm text-slate-500">
                         {link.assetCount} asset(s) | {link.usesConsumed}/{link.maxUses} uses
                       </p>
+                      {link.replacementParentId && (
+                        <p className="mt-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-700">
+                          Child of this link chain
+                        </p>
+                      )}
+                      {link.replacementChildId && (
+                        <p className="mt-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-700">
+                          Has replacement child
+                        </p>
+                      )}
                     </div>
                     <div className="flex items-center gap-2">
                       <StatusPill status={link.status} />
@@ -680,7 +692,7 @@ function Dashboard({ userName }: { userName: string }) {
                   <div className="mt-4 grid grid-cols-3 gap-3 text-center text-xs text-slate-500">
                     <div className="rounded-2xl bg-brand-50 p-3">
                       <p className="font-semibold text-brand-700">{link.mobileOpenCount}</p>
-                      <p>Mobile</p>
+                      <p>Mobile views</p>
                     </div>
                     <div className="rounded-2xl bg-brand-50 p-3">
                       <p className="font-semibold text-brand-700">{link.desktopOpenCount}</p>
@@ -782,7 +794,11 @@ function StatusPill({ status }: { status: string }) {
       ? "bg-emerald-50 text-emerald-600"
       : status === "destroyed"
         ? "bg-rose-50 text-rose-600"
-        : "bg-slate-100 text-slate-600";
+        : status === "expired"
+          ? "bg-amber-50 text-amber-700"
+          : status === "consumed"
+            ? "bg-sky-50 text-sky-700"
+            : "bg-slate-100 text-slate-600";
   return (
     <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] ${palette}`}>
       <Check className="h-3.5 w-3.5" />

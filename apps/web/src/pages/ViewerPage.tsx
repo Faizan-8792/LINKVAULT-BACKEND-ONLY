@@ -11,13 +11,13 @@ import {
   Sparkles,
 } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
-import type { PublicLinkPayload, SecureAsset } from "@secure-viewer/shared";
+import type { PublicLinkPayload, PublicMobilePayload, SecureAsset } from "@secure-viewer/shared";
 import { api } from "../lib/api";
 import { getViewerDeviceContext } from "../lib/deviceContext";
 
 type ValidationState =
   | { kind: "loading" }
-  | { kind: "mobile"; message: string }
+  | { kind: "mobile"; message: string; replacementKind: PublicMobilePayload["replacementKind"]; replacementUrl?: string }
   | { kind: "ready"; link: PublicLinkPayload };
 
 type SessionState = {
@@ -31,6 +31,7 @@ type SessionState = {
 };
 
 const DEAD_LINK_REDIRECT_URL = "https://linkvault-expired-link.invalid";
+const HOVER_OPEN_DELAY_MS = 1000;
 
 export function ViewerPage() {
   const { token = "" } = useParams();
@@ -108,6 +109,8 @@ export function ViewerPage() {
           setValidationState({
             kind: "mobile",
             message: response.data.message,
+            replacementKind: response.data.replacementKind ?? "permanent-expired",
+            replacementUrl: response.data.replacementUrl,
           });
           return;
         }
@@ -217,6 +220,17 @@ export function ViewerPage() {
         deviceContext: getViewerDeviceContext(),
       });
 
+      if (response.data.mode === "mobile") {
+        setValidationState({
+          kind: "mobile",
+          message: response.data.message,
+          replacementKind: response.data.replacementKind ?? "permanent-expired",
+          replacementUrl: response.data.replacementUrl,
+        });
+        setSessionState(null);
+        return;
+      }
+
       setSessionState({ ...response.data, fullscreenAccepted });
       setWarningOverlay(null);
       setContentHidden(false);
@@ -254,7 +268,7 @@ export function ViewerPage() {
       hoverOpenTimerRef.current = null;
       setIsHoverCountdownActive(false);
       triggerOpenContent();
-    }, 2000);
+    }, HOVER_OPEN_DELAY_MS);
   }, [triggerOpenContent]);
 
   async function markAssetProgress(assetId: string, event: "opened" | "completed") {
@@ -311,7 +325,11 @@ export function ViewerPage() {
         {validationState.kind === "loading" && <TokenValidationLoader />}
 
         {validationState.kind === "mobile" && (
-          <MobileBlockedCard message={validationState.message} />
+          <MobileBlockedCard
+            message={validationState.message}
+            replacementKind={validationState.replacementKind}
+            replacementUrl={validationState.replacementUrl}
+          />
         )}
 
         {validationState.kind === "ready" && !sessionState && (
@@ -322,7 +340,7 @@ export function ViewerPage() {
                 Content ready for {validationState.link.recipientName}
               </h2>
               <p className="mt-4 leading-7 text-slate-600">
-                Hover on the content button for 2 seconds to open in secure viewer mode.
+                Hover for 1 second or click the button to open in secure viewer mode.
               </p>
               <div className="mt-8 grid gap-4 md:grid-cols-3">
                 <InfoChip label="Assets" value={validationState.link.assets.length} />
@@ -331,6 +349,7 @@ export function ViewerPage() {
               </div>
               <motion.button
                 type="button"
+                onClick={triggerOpenContent}
                 onMouseEnter={startHoverOpenCountdown}
                 onMouseLeave={cancelHoverOpenCountdown}
                 onKeyDown={(event) => {
@@ -345,10 +364,12 @@ export function ViewerPage() {
                 className="mt-8 inline-flex items-center gap-3 rounded-2xl bg-brand-600 px-6 py-4 text-base font-semibold text-white shadow-halo"
               >
                 <Sparkles className="h-5 w-5" />
-                {isHoverCountdownActive ? "Hovering... opening soon" : "Hover for 2s to open content"}
+                {isHoverCountdownActive ? "Hovering... opening soon" : "Hover 1s or click to open"}
               </motion.button>
               <p className="mt-3 text-sm font-semibold text-brand-700">
-                {isHoverCountdownActive ? "Keep hovering to begin secure viewing" : "Hover and hold for 2 seconds to begin secure viewing"}
+                {isHoverCountdownActive
+                  ? "Keep hovering to begin secure viewing"
+                  : "Hover and hold for 1 second, or click once, to begin secure viewing"}
               </p>
             </div>
 
@@ -489,7 +510,27 @@ function TokenValidationLoader() {
   );
 }
 
-function MobileBlockedCard({ message }: { message: string }) {
+function MobileBlockedCard({
+  message,
+  replacementKind,
+  replacementUrl,
+}: {
+  message: string;
+  replacementKind: PublicMobilePayload["replacementKind"];
+  replacementUrl?: string;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  function copyReplacementUrl() {
+    if (!replacementUrl) {
+      return;
+    }
+    void navigator.clipboard.writeText(replacementUrl).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
   return (
     <section className="glass-panel soft-ring mx-auto max-w-3xl rounded-[36px] bg-gradient-to-br from-brand-100 via-white to-sky-50 p-6 text-center md:p-10">
       <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-3xl bg-brand-600 text-white shadow-halo">
@@ -498,9 +539,31 @@ function MobileBlockedCard({ message }: { message: string }) {
       <h2 className="mt-5 text-3xl font-semibold text-slate-950 md:text-4xl">Desktop access required</h2>
       <p className="mx-auto mt-4 max-w-2xl leading-7 text-slate-700">{message}</p>
       <div className="mt-6 grid gap-3 text-left sm:grid-cols-2">
-        <div className="rounded-2xl bg-white/80 p-4 text-sm text-slate-700">Open this link on desktop browser only.</div>
-        <div className="rounded-2xl bg-white/80 p-4 text-sm text-slate-700">Avoid tab switching and suspicious interactions.</div>
+        <div className="rounded-2xl bg-white/80 p-4 text-sm text-slate-700">
+          Current link expired after mobile detection. Open on desktop browser only.
+        </div>
+        <div className="rounded-2xl bg-white/80 p-4 text-sm text-slate-700">
+          If a replacement link is opened again on mobile, it expires permanently.
+        </div>
       </div>
+      {replacementKind === "issued" && replacementUrl && (
+        <div className="mt-6 rounded-3xl bg-slate-950 p-5 text-left text-slate-100">
+          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-sky-200">Replacement link issued</p>
+          <p className="mt-3 break-all text-sm text-slate-200">{replacementUrl}</p>
+          <button
+            type="button"
+            onClick={copyReplacementUrl}
+            className="mt-4 rounded-full bg-white/10 px-4 py-2 text-sm font-semibold text-white"
+          >
+            {copied ? "Copied" : "Copy new desktop link"}
+          </button>
+        </div>
+      )}
+      {replacementKind === "permanent-expired" && (
+        <p className="mx-auto mt-6 max-w-2xl rounded-2xl bg-rose-50 px-5 py-4 text-sm font-semibold text-rose-700">
+          No new replacement link is available. This access path is permanently expired.
+        </p>
+      )}
     </section>
   );
 }
@@ -779,23 +842,44 @@ function SecureAudioStage({
 }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const openedRef = useRef(false);
+  const [hasStarted, setHasStarted] = useState(false);
+  const [isStarting, setIsStarting] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const startAudio = useCallback(() => {
     const audio = audioRef.current;
-    if (!audio) {
+    if (!audio || hasStarted || isStarting) {
       return;
     }
-    void audio.play().catch(() => undefined);
-  }, []);
+
+    setStartError(null);
+    setIsStarting(true);
+    void audio
+      .play()
+      .then(() => {
+        setHasStarted(true);
+        if (!openedRef.current) {
+          openedRef.current = true;
+          void onOpened();
+        }
+      })
+      .catch(() => {
+        setStartError("Unable to start playback. Check audio output permission and try again.");
+      })
+      .finally(() => {
+        setIsStarting(false);
+      });
+  }, [hasStarted, isStarting, onOpened]);
 
   return (
     <div className="flex min-h-[520px] items-center justify-center rounded-[28px] bg-gradient-to-br from-slate-950 via-brand-950 to-brand-900 p-8 text-white">
       <audio
         ref={audioRef}
         src={src}
-        autoPlay
         controls={false}
+        preload="metadata"
         onPlay={() => {
+          setHasStarted(true);
           if (!openedRef.current) {
             openedRef.current = true;
             void onOpened();
@@ -816,9 +900,28 @@ function SecureAudioStage({
       <div className="text-center">
         <Headphones className="mx-auto h-14 w-14 text-sky-200" />
         <h3 className="mt-5 text-3xl font-semibold">{asset.originalName}</h3>
-        <p className="mt-3 max-w-md leading-7 text-slate-200">
-          Audio playback has started automatically. Stop and pause interactions are ignored until completion.
-        </p>
+        {!hasStarted ? (
+          <div className="mt-4">
+            <p className="mx-auto max-w-md leading-7 text-slate-200">
+              Attach headphones before you start. Once playback begins, pause and stop are blocked until completion.
+            </p>
+            <button
+              type="button"
+              onClick={startAudio}
+              disabled={isStarting}
+              data-allow-secure-action="true"
+              className="mt-5 inline-flex items-center gap-2 rounded-full bg-white px-5 py-2 text-sm font-semibold text-slate-900 disabled:opacity-70"
+            >
+              <PlayCircle className="h-4 w-4" />
+              {isStarting ? "Starting audio..." : "Play audio now"}
+            </button>
+            {startError && <p className="mt-3 text-sm font-semibold text-rose-200">{startError}</p>}
+          </div>
+        ) : (
+          <p className="mt-3 max-w-md leading-7 text-slate-200">
+            Audio is playing. Pause and stop interactions are ignored until completion.
+          </p>
+        )}
         <div className="mt-8 flex justify-center gap-2">
           {Array.from({ length: 18 }).map((_, index) => (
             <motion.span

@@ -29,6 +29,8 @@ const secureLinkSchema = new Schema(
     },
     assets: { type: [assetSchema], required: true },
     createdBy: { type: Schema.Types.ObjectId, ref: "User", required: true },
+    replacementParentId: { type: Schema.Types.ObjectId, ref: "SecureLink", default: null, index: true },
+    replacementChildId: { type: Schema.Types.ObjectId, ref: "SecureLink", default: null, index: true },
     lastDeviceType: { type: String, default: null },
     mobileOpenCount: { type: Number, default: 0 },
     desktopOpenCount: { type: Number, default: 0 },

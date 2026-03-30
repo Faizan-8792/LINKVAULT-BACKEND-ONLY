@@ -12,7 +12,7 @@ import { SecureLinkModel } from "../models/SecureLink.js";
 import { UserModel } from "../models/User.js";
 import { ViewerSessionModel } from "../models/ViewerSession.js";
 import { storageProvider } from "../storage/storage.js";
-import { createSecureLink } from "../services/links.js";
+import { createSecureLink, removeAssetIfUnreferenced } from "../services/links.js";
 import { asyncHandler } from "../utils/http.js";
 
 const tempRoot = path.resolve(config.uploadRoot, "..", "temp");
@@ -141,6 +141,8 @@ adminRouter.get(
         usesConsumed: link.usesConsumed,
         mobileOpenCount: link.mobileOpenCount,
         desktopOpenCount: link.desktopOpenCount,
+        replacementParentId: link.replacementParentId ? String(link.replacementParentId) : null,
+        replacementChildId: link.replacementChildId ? String(link.replacementChildId) : null,
         createdAt: link.createdAt.toISOString(),
         expiredAt: link.expiredAt?.toISOString() ?? null,
         assetCount: link.assets.length,
@@ -168,6 +170,8 @@ adminRouter.get(
       mobileMessageTemplate: link.mobileMessageTemplate,
       mobileOpenCount: link.mobileOpenCount,
       desktopOpenCount: link.desktopOpenCount,
+      replacementParentId: link.replacementParentId ? String(link.replacementParentId) : null,
+      replacementChildId: link.replacementChildId ? String(link.replacementChildId) : null,
       warning: link.warningMessage,
       assets: link.assets.map((asset: any) => ({
         id: asset.assetId,
@@ -207,7 +211,9 @@ adminRouter.delete(
     }
 
     await Promise.all(
-      link.assets.map((asset: { storageKey: string }) => storageProvider.remove(asset.storageKey)),
+      link.assets.map((asset: { storageKey: string }) =>
+        removeAssetIfUnreferenced(asset.storageKey, String(link._id)),
+      ),
     );
     await Promise.all([
       ViewerSessionModel.deleteMany({ linkId: link._id }),
