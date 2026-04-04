@@ -335,9 +335,9 @@ export function ViewerPage() {
     window.location.replace(DEAD_LINK_REDIRECT_URL);
   }
 
-  const openContent = useCallback(async () => {
+  const openContent = useCallback(async (preferFullscreen: boolean) => {
     try {
-      const fullscreenAccepted = await requestFullscreenBestEffort();
+      const fullscreenAccepted = preferFullscreen ? await requestFullscreenBestEffort() : false;
       const response = await api.post("/api/public/start-session", {
         token,
         fullscreenAccepted,
@@ -375,7 +375,7 @@ export function ViewerPage() {
     }
   }, [token]);
 
-  const triggerOpenContent = useCallback(() => {
+  const triggerOpenContent = useCallback((preferFullscreen = false) => {
     if (isOpeningContentRef.current || sessionStateRef.current) {
       return;
     }
@@ -383,7 +383,7 @@ export function ViewerPage() {
     cancelAutoOpenCountdown();
     isOpeningContentRef.current = true;
     setIsOpeningContent(true);
-    void openContent().finally(() => {
+    void openContent(preferFullscreen).finally(() => {
       isOpeningContentRef.current = false;
       setIsOpeningContent(false);
     });
@@ -401,7 +401,7 @@ export function ViewerPage() {
 
     autoOpenTimerRef.current = window.setTimeout(() => {
       autoOpenTimerRef.current = null;
-      triggerOpenContent();
+      triggerOpenContent(false);
     }, AUTO_OPEN_DELAY_MS);
 
     return cancelAutoOpenCountdown;
@@ -470,28 +470,29 @@ export function ViewerPage() {
         )}
 
         {validationState.kind === "ready" && !sessionState && (
-          <section className="grid gap-8 lg:grid-cols-[0.9fr_1.1fr]">
+          <section className="mx-auto max-w-3xl">
             <div className="glass-panel soft-ring rounded-[32px] p-8">
               <p className="text-sm font-semibold uppercase tracking-[0.35em] text-brand-700">Validated for desktop</p>
               <h2 className="mt-3 text-4xl font-semibold text-slate-950">
                 Content ready for {validationState.link.recipientName}
               </h2>
-              <p className="mt-4 leading-7 text-slate-600">
-                Desktop par link validate hote hi content 5 seconds me automatically open ho jayega. Aap chahein to
-                button tap karke abhi bhi turant open kar sakte hain.
-              </p>
               <div className="mt-8 grid gap-4 md:grid-cols-3">
                 <InfoChip label="Assets" value={validationState.link.assets.length} />
                 <InfoChip label="Remaining uses" value={validationState.link.remainingUses} />
                 <InfoChip label="Image timer" value={`${validationState.link.imageDisplaySeconds}s`} />
               </div>
+              {warningOverlay && (
+                <div className="mt-6 rounded-3xl border border-amber-200 bg-amber-50 p-5 text-sm font-semibold text-amber-700">
+                  {warningOverlay}
+                </div>
+              )}
               <button
                 type="button"
-                onClick={triggerOpenContent}
+                onClick={() => triggerOpenContent(true)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" || event.key === " ") {
                     event.preventDefault();
-                    triggerOpenContent();
+                    triggerOpenContent(true);
                   }
                 }}
                 className="mt-8 inline-flex items-center gap-3 rounded-2xl bg-brand-600 px-6 py-4 text-base font-semibold text-white shadow-halo disabled:opacity-70"
@@ -500,21 +501,6 @@ export function ViewerPage() {
                 <Sparkles className="h-5 w-5" />
                 {isOpeningContent ? "Opening secure viewer..." : "Tap to open now"}
               </button>
-              <p className="mt-3 text-sm font-semibold text-brand-700">
-                Desktop auto-open runs after 5 seconds. Tap once if you want to start immediately.
-              </p>
-            </div>
-
-            <div className="glass-panel soft-ring rounded-[32px] p-8">
-              <div className="rounded-[28px] bg-gradient-to-br from-brand-700 via-brand-600 to-sky-400 p-6 text-white">
-                <p className="text-sm uppercase tracking-[0.3em] text-white/80">Session rules</p>
-                <div className="mt-6 space-y-4">
-                  <RuleRow icon={Monitor} text="Mobile opens never consume the link." />
-                  <RuleRow icon={ImageIcon} text="Images open only on explicit reveal and auto-close on a timer." />
-                  <RuleRow icon={PlayCircle} text="Video and audio must run to completion with custom locked playback." />
-                  <RuleRow icon={ShieldAlert} text="First Esc allows one resume. Second Esc expires the link." />
-                </div>
-              </div>
             </div>
           </section>
         )}
@@ -768,17 +754,6 @@ function InfoChip({ label, value }: { label: string; value: string | number }) {
     <div className="rounded-3xl bg-gradient-to-br from-white via-brand-50 to-brand-100 p-5 shadow-sm">
       <p className="text-sm font-medium text-slate-500">{label}</p>
       <p className="mt-3 text-3xl font-semibold text-slate-950">{value}</p>
-    </div>
-  );
-}
-
-function RuleRow({ icon: Icon, text }: { icon: typeof Monitor; text: string }) {
-  return (
-    <div className="flex items-start gap-4 rounded-2xl bg-white/10 p-4 backdrop-blur">
-      <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-white/15">
-        <Icon className="h-5 w-5" />
-      </div>
-      <p className="leading-7 text-white/90">{text}</p>
     </div>
   );
 }

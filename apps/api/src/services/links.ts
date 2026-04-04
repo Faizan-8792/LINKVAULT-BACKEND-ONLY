@@ -47,6 +47,40 @@ function mapAssets(link: SecureLinkDocument) {
   }));
 }
 
+function buildSessionPayload(input: {
+  sessionId: string;
+  deviceType: DeviceType;
+  warningCount: number;
+  status: "active" | "warning";
+  currentAssetIndex: number;
+  assets: ReturnType<typeof mapAssets>;
+  completedAssetIds: string[];
+}) {
+  const streamTickets = Object.fromEntries(
+    input.assets.map((asset) => [
+      asset.id,
+      signStreamTicket({
+        sessionId: input.sessionId,
+        assetId: asset.id,
+        expiresAt: Date.now() + 5 * 60 * 1000,
+      }),
+    ]),
+  );
+
+  const payload: PublicSessionPayload & { streamTickets: Record<string, string> } = {
+    sessionId: input.sessionId,
+    deviceType: input.deviceType,
+    warningCount: input.warningCount,
+    status: input.status,
+    currentAssetIndex: input.currentAssetIndex,
+    assets: input.assets,
+    completedAssetIds: input.completedAssetIds,
+    streamTickets,
+  };
+
+  return payload;
+}
+
 function scheduleCleanup(link: SecureLinkDocument) {
   const seconds = Math.min(300, Math.max(60, link.autoDeleteDelaySeconds ?? 300));
   link.cleanupAt = new Date(Date.now() + seconds * 1000);
@@ -506,6 +540,7 @@ export async function startViewerSession(
   deviceContext?: ViewerDeviceContext,
 ) {
   const deviceType = resolveDevice(req, deviceContext);
+  const fingerprint = readClientFingerprint(req);
   const link = await findLinkByToken(token);
 
   if (!link) {
@@ -532,13 +567,35 @@ export async function startViewerSession(
 
   const activeSession = await ensureNoActiveDesktopSession(String(link._id));
   if (activeSession) {
+    if (activeSession.fingerprint && fingerprint && activeSession.fingerprint === fingerprint) {
+      const completedAssets = activeSession.completedAssets as unknown as CompletedAssetRecord[];
+      const assets = mapAssets(link);
+
+      activeSession.fullscreenAccepted = fullscreenAccepted;
+      await activeSession.save();
+
+      const payload = buildSessionPayload({
+        sessionId: String(activeSession._id),
+        deviceType: activeSession.deviceType as DeviceType,
+        warningCount: activeSession.warningCount,
+        status: activeSession.status,
+        currentAssetIndex: activeSession.currentAssetIndex,
+        assets,
+        completedAssetIds: completedAssets
+          .filter((item) => item.completedAt)
+          .map((item) => item.assetId),
+      });
+
+      return { status: 200 as const, payload };
+    }
+
     return { status: 409 as const, payload: { message: "A secure session is already active" } };
   }
 
   const session = await ViewerSessionModel.create({
     linkId: link._id,
     deviceType,
-    fingerprint: readClientFingerprint(req),
+    fingerprint,
     fullscreenAccepted,
     warningCount: 0,
     status: "active",
@@ -563,18 +620,7 @@ export async function startViewerSession(
   });
 
   const assets = mapAssets(link);
-  const streamTickets = Object.fromEntries(
-    assets.map((asset) => [
-      asset.id,
-      signStreamTicket({
-        sessionId: String(session._id),
-        assetId: asset.id,
-        expiresAt: Date.now() + 5 * 60 * 1000,
-      }),
-    ]),
-  );
-
-  const payload: PublicSessionPayload & { streamTickets: Record<string, string> } = {
+  const payload = buildSessionPayload({
     sessionId: String(session._id),
     deviceType,
     warningCount: 0,
@@ -582,8 +628,7 @@ export async function startViewerSession(
     currentAssetIndex: 0,
     assets,
     completedAssetIds: [],
-    streamTickets,
-  };
+  });
 
   return { status: 200 as const, payload };
 }

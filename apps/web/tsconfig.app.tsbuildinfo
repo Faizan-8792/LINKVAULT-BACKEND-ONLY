@@ -1,1 +1,1 @@
-{"root":["./src/app.tsx","./src/main.tsx","./src/vite-env.d.ts","./src/lib/api.ts","./src/lib/browserkey.ts","./src/lib/devicecontext.ts","./src/pages/adminpage.tsx","./src/pages/homepage.tsx","./src/pages/viewerpage.tsx","./src/state/auth.tsx"],"version":"5.7.3"}
+{"root":["./src/app.tsx","./src/main.tsx","./src/vite-env.d.ts","./src/lib/api.ts","./src/lib/browserkey.ts","./src/lib/devicecontext.ts","./src/pages/adminpage.tsx","./src/pages/homepage.tsx","./src/pages/viewerpage.tsx","./src/state/auth.tsx"],"version":"5.9.3"}
