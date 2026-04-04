@@ -419,6 +419,11 @@ export async function validatePublicLink(
     return handleNonDesktopOpen(link, deviceType);
   }
 
+  const reopenExpiryResult = await expireLinkOnReopenIfNeeded(link, req);
+  if (reopenExpiryResult) {
+    return reopenExpiryResult;
+  }
+
   link.lastDeviceType = deviceType;
   await link.save();
 
@@ -446,6 +451,54 @@ export async function ensureNoActiveDesktopSession(linkId: string) {
   });
 }
 
+async function findReopenExpirySession(linkId: string, fingerprint: string | null) {
+  if (fingerprint) {
+    const sameFingerprintSession = await ViewerSessionModel.findOne({
+      linkId,
+      status: { $in: ["active", "warning"] },
+      expireOnReopen: true,
+      fingerprint,
+    }).sort({ createdAt: -1 });
+
+    if (sameFingerprintSession) {
+      return sameFingerprintSession;
+    }
+  }
+
+  return ViewerSessionModel.findOne({
+    linkId,
+    status: { $in: ["active", "warning"] },
+    expireOnReopen: true,
+  }).sort({ createdAt: -1 });
+}
+
+async function expireLinkOnReopenIfNeeded(link: SecureLinkDocument, req: Request) {
+  const fingerprint = readClientFingerprint(req);
+  const reopenSession = await findReopenExpirySession(String(link._id), fingerprint);
+
+  if (!reopenSession) {
+    return null;
+  }
+
+  reopenSession.status = "destroyed";
+  reopenSession.pauseReason = "refresh-after-pause";
+  reopenSession.destroyReason = "refresh-after-pause";
+  reopenSession.endedAt = new Date();
+  await reopenSession.save();
+
+  await expireLink(link, "expired");
+
+  await recordAuditEvent({
+    linkId: String(link._id),
+    sessionId: String(reopenSession._id),
+    type: "refresh-expired-link",
+    message: "Link expired after refresh/reopen following pause attempt",
+    metadata: { fingerprint },
+  });
+
+  return { status: 410 as const, payload: { message: "This link has expired" } };
+}
+
 export async function startViewerSession(
   token: string,
   req: Request,
@@ -470,6 +523,11 @@ export async function startViewerSession(
 
   if (deviceType !== "desktop") {
     return handleNonDesktopOpen(link, deviceType);
+  }
+
+  const reopenExpiryResult = await expireLinkOnReopenIfNeeded(link, req);
+  if (reopenExpiryResult) {
+    return reopenExpiryResult;
   }
 
   const activeSession = await ensureNoActiveDesktopSession(String(link._id));
@@ -709,7 +767,7 @@ export async function finalizeSession(sessionId: string) {
   };
 }
 
-export async function resumeViewerSession(sessionId: string) {
+export async function resumeViewerSession(sessionId: string, fullscreenAccepted = false) {
   const loaded = await loadSessionAndLink(sessionId);
   if ("status" in loaded) {
     return loaded;
@@ -733,6 +791,7 @@ export async function resumeViewerSession(sessionId: string) {
   }
 
   session.status = "active";
+  session.fullscreenAccepted = fullscreenAccepted;
   session.pauseReason = null;
   await session.save();
 
@@ -744,6 +803,7 @@ export async function resumeViewerSession(sessionId: string) {
       session.resumeUsed && session.escapeCount > 0
         ? "Viewer resumed after one-time escape pause"
         : "Viewer resumed after warning pause",
+    metadata: { fullscreenAccepted },
   });
 
   return {
@@ -865,6 +925,11 @@ export async function reportSuspiciousEvent(input: { sessionId: string; event: s
           : "Secure view paused. You can resume only once.",
       },
     };
+  }
+
+  if (input.event === "pause-attempt") {
+    session.pauseAttemptCount = Math.max(0, session.pauseAttemptCount ?? 0) + 1;
+    session.expireOnReopen = true;
   }
 
   session.warningCount += 1;

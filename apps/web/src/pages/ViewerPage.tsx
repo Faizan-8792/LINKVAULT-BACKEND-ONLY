@@ -141,8 +141,10 @@ export function ViewerPage() {
 
     setIsResuming(true);
     try {
+      const fullscreenAccepted = await requestFullscreenBestEffort();
       await api.post("/api/public/resume-session", {
         sessionId: session.sessionId,
+        fullscreenAccepted,
       });
       setWarningOverlay(null);
       setResumeMode(null);

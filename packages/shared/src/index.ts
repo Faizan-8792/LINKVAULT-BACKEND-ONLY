@@ -120,6 +120,7 @@ export type SessionProgressInput = z.infer<typeof sessionProgressSchema>;
 
 export const resumeSessionSchema = z.object({
   sessionId: z.string().min(12),
+  fullscreenAccepted: z.boolean().optional(),
 });
 export type ResumeSessionInput = z.infer<typeof resumeSessionSchema>;
 

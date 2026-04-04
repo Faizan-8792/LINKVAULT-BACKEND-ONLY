@@ -30,6 +30,8 @@ const viewerSessionSchema = new Schema(
     fullscreenAccepted: { type: Boolean, default: false },
     escapeCount: { type: Number, default: 0 },
     resumeUsed: { type: Boolean, default: false },
+    pauseAttemptCount: { type: Number, default: 0 },
+    expireOnReopen: { type: Boolean, default: false },
     pauseReason: { type: String, default: null },
     destroyReason: { type: String, default: null },
     endedAt: { type: Date, default: null },

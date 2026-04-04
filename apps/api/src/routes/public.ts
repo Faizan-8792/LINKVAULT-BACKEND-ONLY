@@ -94,7 +94,7 @@ publicRouter.post(
   "/resume-session",
   asyncHandler(async (req, res) => {
     const body = resumeSessionSchema.parse(req.body);
-    const result = await resumeViewerSession(body.sessionId);
+    const result = await resumeViewerSession(body.sessionId, body.fullscreenAccepted);
     if (!result) {
       return res.status(500).json({ message: "Unexpected empty response" });
     }

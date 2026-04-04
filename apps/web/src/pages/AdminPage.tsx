@@ -726,23 +726,23 @@ function Dashboard({ userName }: { userName: string }) {
                         <p>Created</p>
                       </div>
                     </div>
-                    <div className="mt-4 rounded-2xl bg-slate-950/95 p-4 text-slate-100">
+                    <div className="mt-4 rounded-2xl bg-white/75 p-4 shadow-sm">
                       <div className="flex flex-wrap items-center justify-between gap-3">
-                        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-200">
+                        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-brand-700">
                           Link for this section
                         </p>
                         {link.viewerUrl && (
                           <button
                             type="button"
                             onClick={() => void navigator.clipboard.writeText(link.viewerUrl ?? "")}
-                            className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs font-semibold text-white"
+                            className="inline-flex items-center gap-2 rounded-full bg-brand-600 px-3 py-1 text-xs font-semibold text-white"
                           >
                             <Copy className="h-3.5 w-3.5" />
                             Copy link
                           </button>
                         )}
                       </div>
-                      <p className="mt-3 break-all text-sm text-slate-200">
+                      <p className="mt-3 break-all text-sm text-slate-700">
                         {link.viewerUrl ?? "Legacy link URL unavailable for this record."}
                       </p>
                     </div>
