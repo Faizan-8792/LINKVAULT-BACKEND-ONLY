@@ -401,7 +401,7 @@ export function ViewerPage() {
 
     autoOpenTimerRef.current = window.setTimeout(() => {
       autoOpenTimerRef.current = null;
-      triggerOpenContent(false);
+      triggerOpenContent(true);
     }, AUTO_OPEN_DELAY_MS);
 
     return cancelAutoOpenCountdown;
@@ -1254,12 +1254,16 @@ function useViewerSecurity({
 
 async function requestFullscreenBestEffort() {
   const element = document.documentElement;
-  if (!element.requestFullscreen) {
+  const requestFullscreen =
+    element.requestFullscreen ||
+    (element as typeof element & { webkitRequestFullscreen?: () => Promise<void> | void }).webkitRequestFullscreen;
+
+  if (!requestFullscreen) {
     return false;
   }
 
   try {
-    await element.requestFullscreen();
+    await requestFullscreen.call(element);
     return true;
   } catch {
     return false;

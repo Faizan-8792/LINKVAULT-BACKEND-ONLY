@@ -927,47 +927,34 @@ export async function reportSuspiciousEvent(input: { sessionId: string; event: s
       metadata: { escapeCount: session.escapeCount, resumeUsed: session.resumeUsed },
     });
 
-    if (session.escapeCount >= 2) {
-      session.status = "destroyed";
-      session.pauseReason = "escape-key";
-      session.destroyReason = "escape-key";
-      session.endedAt = new Date();
-      await session.save();
-
-      await expireLink(link, "expired");
-
-      await recordAuditEvent({
-        linkId: String(link._id),
-        sessionId: String(session._id),
-        type: "escape-expired-link",
-        message: "Link expired after second escape press",
-      });
-
-      return {
-        status: 200 as const,
-        payload: {
-          destroyed: true,
-          sessionEnded: true,
-          resumeAllowed: false,
-          linkExpired: true,
-          message: "This link has expired",
-        },
-      };
-    }
-
-    session.status = "warning";
+    session.status = "destroyed";
     session.pauseReason = "escape-key";
+    session.destroyReason = "escape-key";
+    session.expireOnReopen = true;
+    session.resumeUsed = true;
+    session.endedAt = new Date();
     await session.save();
+
+    await expireLink(link, "expired");
+
+    await recordAuditEvent({
+      linkId: String(link._id),
+      sessionId: String(session._id),
+      type: "escape-expired-link",
+      message:
+        session.escapeCount > 1
+          ? "Link expired after repeated escape press"
+          : "Link expired after escape press",
+    });
 
     return {
       status: 200 as const,
       payload: {
-        destroyed: false,
-        sessionEnded: false,
-        resumeAllowed: !session.resumeUsed,
-        message: session.resumeUsed
-          ? "Secure view paused, but the one-time resume is already used."
-          : "Secure view paused. You can resume only once.",
+        destroyed: true,
+        sessionEnded: true,
+        resumeAllowed: false,
+        linkExpired: true,
+        message: "This link has expired",
       },
     };
   }

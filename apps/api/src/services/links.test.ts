@@ -3,12 +3,16 @@ import { hashToken } from "../utils/crypto.js";
 
 const {
   secureLinkFindOneMock,
+  secureLinkFindByIdMock,
   viewerSessionFindOneMock,
+  viewerSessionFindByIdMock,
   viewerSessionCreateMock,
   recordAuditEventMock,
 } = vi.hoisted(() => ({
   secureLinkFindOneMock: vi.fn(),
+  secureLinkFindByIdMock: vi.fn(),
   viewerSessionFindOneMock: vi.fn(),
+  viewerSessionFindByIdMock: vi.fn(),
   viewerSessionCreateMock: vi.fn(),
   recordAuditEventMock: vi.fn(),
 }));
@@ -16,7 +20,7 @@ const {
 vi.mock("../models/SecureLink.js", () => ({
   SecureLinkModel: {
     findOne: secureLinkFindOneMock,
-    findById: vi.fn(),
+    findById: secureLinkFindByIdMock,
     exists: vi.fn(),
     create: vi.fn(),
   },
@@ -25,7 +29,7 @@ vi.mock("../models/SecureLink.js", () => ({
 vi.mock("../models/ViewerSession.js", () => ({
   ViewerSessionModel: {
     findOne: viewerSessionFindOneMock,
-    findById: vi.fn(),
+    findById: viewerSessionFindByIdMock,
     create: viewerSessionCreateMock,
   },
 }));
@@ -34,7 +38,7 @@ vi.mock("./audit.js", () => ({
   recordAuditEvent: recordAuditEventMock,
 }));
 
-import { startViewerSession } from "./links.js";
+import { reportSuspiciousEvent, startViewerSession } from "./links.js";
 
 const DESKTOP_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/123.0.0.0 Safari/537.36";
@@ -93,7 +97,7 @@ function createSession(overrides?: Partial<Record<string, unknown>>) {
     fullscreenAccepted: false,
     save: vi.fn().mockResolvedValue(undefined),
     ...overrides,
-  };
+  } as any;
 }
 
 function createRequest(fingerprint: string) {
@@ -125,6 +129,8 @@ describe("startViewerSession", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     secureLinkFindOneMock.mockResolvedValue(createLink());
+    secureLinkFindByIdMock.mockResolvedValue(null);
+    viewerSessionFindByIdMock.mockResolvedValue(null);
     viewerSessionCreateMock.mockResolvedValue({
       _id: "session-new",
       save: vi.fn().mockResolvedValue(undefined),
@@ -165,5 +171,46 @@ describe("startViewerSession", () => {
       payload: { message: "A secure session is already active" },
     });
     expect(viewerSessionCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("expires the link immediately on the first escape press", async () => {
+    const session = createSession({
+      status: "active",
+      escapeCount: 0,
+      resumeUsed: false,
+      pauseReason: null,
+      destroyReason: null,
+      endedAt: null,
+      expireOnReopen: false,
+    });
+    const link = createLink();
+
+    viewerSessionFindByIdMock.mockResolvedValue(session);
+    secureLinkFindByIdMock.mockResolvedValue(link);
+
+    const result = await reportSuspiciousEvent({
+      sessionId: "session-1",
+      event: "escape-key",
+    });
+
+    expect(result).toEqual({
+      status: 200,
+      payload: {
+        destroyed: true,
+        sessionEnded: true,
+        resumeAllowed: false,
+        linkExpired: true,
+        message: "This link has expired",
+      },
+    });
+    expect(session.status).toBe("destroyed");
+    expect(session.pauseReason).toBe("escape-key");
+    expect(session.destroyReason).toBe("escape-key");
+    expect(session.resumeUsed).toBe(true);
+    expect(session.expireOnReopen).toBe(true);
+    expect(link.status).toBe("expired");
+    expect(session.save).toHaveBeenCalledTimes(1);
+    expect(link.save).toHaveBeenCalledTimes(1);
+    expect(recordAuditEventMock).toHaveBeenCalledTimes(2);
   });
 });
