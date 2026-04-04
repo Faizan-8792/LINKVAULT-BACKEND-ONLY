@@ -6,6 +6,7 @@ export const api = axios.create({
 });
 
 api.defaults.headers.common["X-Auth-Fingerprint"] = getOrCreateBrowserKey();
+api.defaults.headers.common["X-Client-Fingerprint"] = getOrCreateBrowserKey();
 
 export function setApiToken(token: string | null) {
   if (token) {

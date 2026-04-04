@@ -4,6 +4,8 @@ import {
   assetProgressSchema,
   consumeContentSchema,
   destroyLinkSchema,
+  resumeSessionSchema,
+  sessionProgressSchema,
   suspiciousReportSchema,
   startSessionSchema,
   validateLinkSchema,
@@ -15,7 +17,9 @@ import {
   destroySessionOrLink,
   finalizeSession,
   recordAssetProgress,
+  recordSessionProgress,
   reportSuspiciousEvent,
+  resumeViewerSession,
   startViewerSession,
   validatePublicLink,
 } from "../services/links.js";
@@ -32,7 +36,7 @@ publicRouter.post(
   asyncHandler(async (req, res) => {
     const body = validateLinkSchema.parse(req.body);
     const result = await validatePublicLink(body.token, req, body.deviceContext);
-    return res.status(result.status).json(result.payload);
+    return res.status(result.status ?? 500).json(result.payload ?? { message: "Unexpected empty response" });
   }),
 );
 
@@ -46,7 +50,7 @@ publicRouter.post(
       body.fullscreenAccepted,
       body.deviceContext,
     );
-    return res.status(result.status).json(result.payload);
+    return res.status(result.status ?? 500).json(result.payload ?? { message: "Unexpected empty response" });
   }),
 );
 
@@ -55,7 +59,22 @@ publicRouter.post(
   asyncHandler(async (req, res) => {
     const body = assetProgressSchema.parse(req.body);
     const result = await recordAssetProgress(body);
-    return res.status(result.status).json(result.payload);
+    if (!result) {
+      return res.status(500).json({ message: "Unexpected empty response" });
+    }
+    return res.status(result.status ?? 500).json(result.payload ?? { message: "Unexpected empty response" });
+  }),
+);
+
+publicRouter.post(
+  "/session-progress",
+  asyncHandler(async (req, res) => {
+    const body = sessionProgressSchema.parse(req.body);
+    const result = await recordSessionProgress(body);
+    if (!result) {
+      return res.status(500).json({ message: "Unexpected empty response" });
+    }
+    return res.status(result.status ?? 500).json(result.payload ?? { message: "Unexpected empty response" });
   }),
 );
 
@@ -64,7 +83,22 @@ publicRouter.post(
   asyncHandler(async (req, res) => {
     const body = consumeContentSchema.parse(req.body);
     const result = await finalizeSession(body.sessionId);
-    return res.status(result.status).json(result.payload);
+    if (!result) {
+      return res.status(500).json({ message: "Unexpected empty response" });
+    }
+    return res.status(result.status ?? 500).json(result.payload ?? { message: "Unexpected empty response" });
+  }),
+);
+
+publicRouter.post(
+  "/resume-session",
+  asyncHandler(async (req, res) => {
+    const body = resumeSessionSchema.parse(req.body);
+    const result = await resumeViewerSession(body.sessionId);
+    if (!result) {
+      return res.status(500).json({ message: "Unexpected empty response" });
+    }
+    return res.status(result.status ?? 500).json(result.payload ?? { message: "Unexpected empty response" });
   }),
 );
 
@@ -73,7 +107,10 @@ publicRouter.post(
   asyncHandler(async (req, res) => {
     const body = suspiciousReportSchema.parse(req.body);
     const result = await reportSuspiciousEvent(body);
-    return res.status(result.status).json(result.payload);
+    if (!result) {
+      return res.status(500).json({ message: "Unexpected empty response" });
+    }
+    return res.status(result.status ?? 500).json(result.payload ?? { message: "Unexpected empty response" });
   }),
 );
 

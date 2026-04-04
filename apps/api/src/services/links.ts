@@ -3,8 +3,8 @@ import {
   interpolateMobileMessage,
   limitationCopy,
   type DeviceType,
-  type PublicMobilePayload,
   type PublicLinkPayload,
+  type PublicMobilePayload,
   type PublicSessionPayload,
   type ViewerDeviceContext,
 } from "@secure-viewer/shared";
@@ -52,6 +52,146 @@ function scheduleCleanup(link: SecureLinkDocument) {
   link.cleanupAt = new Date(Date.now() + seconds * 1000);
 }
 
+function readClientFingerprint(req: Request) {
+  const header = req.headers["x-client-fingerprint"];
+  return typeof header === "string" ? header : Array.isArray(header) ? header[0] : null;
+}
+
+async function expireLink(link: SecureLinkDocument, status: "expired" | "destroyed") {
+  link.status = status;
+  link.expiredAt = new Date();
+  scheduleCleanup(link);
+  await link.save();
+}
+
+async function loadSessionAndLink(sessionId: string) {
+  const session = await ViewerSessionModel.findById(sessionId);
+  if (!session) {
+    return { status: 404 as const, payload: { message: "Session not found" } };
+  }
+
+  const link = await SecureLinkModel.findById(session.linkId);
+  if (!link) {
+    return { status: 404 as const, payload: { message: "This link has expired" } };
+  }
+
+  return { session, link };
+}
+
+function ensureCurrentAsset(
+  link: SecureLinkDocument,
+  currentAssetIndex: number,
+  assetId: string,
+) {
+  const assets = sortAssets(link.assets as unknown as LinkAssetRecord[]);
+  const currentAsset = assets[currentAssetIndex];
+
+  if (!currentAsset || currentAsset.assetId !== assetId) {
+    return { error: { status: 400 as const, payload: { message: "Asset order mismatch" } } };
+  }
+
+  return { assets, currentAsset };
+}
+
+function updateLinkAssetDuration(
+  link: SecureLinkDocument,
+  assetId: string,
+  durationSeconds?: number | null,
+) {
+  if (typeof durationSeconds !== "number" || Number.isNaN(durationSeconds) || durationSeconds <= 0) {
+    return;
+  }
+
+  const asset = (link.assets as unknown as LinkAssetRecord[]).find((item) => item.assetId === assetId);
+  if (!asset || asset.type === "image") {
+    return;
+  }
+
+  asset.durationSeconds = durationSeconds;
+  link.markModified("assets");
+}
+
+function markLinkConsumedIfOutOfUses(link: SecureLinkDocument) {
+  if (link.usesConsumed < link.maxUses) {
+    return false;
+  }
+
+  link.status = "consumed";
+  link.expiredAt = new Date();
+  scheduleCleanup(link);
+  return true;
+}
+
+function getCurrentAssetForSession(link: SecureLinkDocument, currentAssetIndex: number) {
+  const assets = sortAssets(link.assets as unknown as LinkAssetRecord[]);
+  return assets[currentAssetIndex] ?? null;
+}
+
+function clearIncompleteImageCutState(link: SecureLinkDocument, assetId: string) {
+  if (link.incompleteImageAssetId !== assetId) {
+    return false;
+  }
+
+  link.incompleteImageAssetId = null;
+  link.incompleteImageCutCount = 0;
+  return true;
+}
+
+async function registerIncompleteImageCut(input: {
+  link: SecureLinkDocument;
+  session: {
+    _id: unknown;
+    currentAssetIndex: number;
+    currentAssetElapsedSeconds?: number | null;
+    completedAssets?: CompletedAssetRecord[] | null;
+  };
+  event: string;
+}) {
+  const currentAsset = getCurrentAssetForSession(input.link, input.session.currentAssetIndex);
+  if (!currentAsset || currentAsset.type !== "image") {
+    return { tracked: false as const, expired: false as const, cutCount: 0 };
+  }
+
+  const completedAssets = input.session.completedAssets ?? [];
+  const isAlreadyCompleted = completedAssets.some(
+    (item) => item.assetId === currentAsset.assetId && item.completedAt,
+  );
+
+  if (isAlreadyCompleted) {
+    return { tracked: false as const, expired: false as const, cutCount: 0 };
+  }
+
+  const nextCutCount =
+    input.link.incompleteImageAssetId === currentAsset.assetId
+      ? (input.link.incompleteImageCutCount ?? 0) + 1
+      : 1;
+
+  input.link.incompleteImageAssetId = currentAsset.assetId;
+  input.link.incompleteImageCutCount = nextCutCount;
+
+  await recordAuditEvent({
+    linkId: String(input.link._id),
+    sessionId: String(input.session._id),
+    type: "incomplete-image-cut",
+    message: "Secure image was interrupted before completion",
+    metadata: {
+      assetId: currentAsset.assetId,
+      event: input.event,
+      elapsedSeconds: Math.max(0, input.session.currentAssetElapsedSeconds ?? 0),
+      cutCount: nextCutCount,
+      requiredSeconds: input.link.imageDisplaySeconds,
+    },
+  });
+
+  if (nextCutCount >= 2) {
+    await expireLink(input.link, "expired");
+    return { tracked: true as const, expired: true as const, cutCount: nextCutCount };
+  }
+
+  await input.link.save();
+  return { tracked: true as const, expired: false as const, cutCount: nextCutCount };
+}
+
 export async function createSecureLink(input: {
   recipientName: string;
   mobileMessageTemplate: string;
@@ -73,6 +213,7 @@ export async function createSecureLink(input: {
   clientUrl: string;
 }) {
   const { token, tokenHash } = issueLinkToken();
+  const viewerUrl = `${input.clientUrl.replace(/\/$/, "")}/v/${encodeURIComponent(token)}`;
   const link = await SecureLinkModel.create({
     tokenHash,
     recipientName: input.recipientName,
@@ -92,6 +233,7 @@ export async function createSecureLink(input: {
     })),
     createdBy: input.createdBy,
     replacementParentId: input.replacementParentId ?? null,
+    viewerUrl,
     autoDeleteDelaySeconds: input.autoDeleteDelaySeconds,
     warningMessage: input.warningMessage ?? limitationCopy,
   });
@@ -99,7 +241,7 @@ export async function createSecureLink(input: {
   return {
     linkId: String(link._id),
     token,
-    viewerUrl: `${input.clientUrl.replace(/\/$/, "")}/v/${encodeURIComponent(token)}`,
+    viewerUrl,
   };
 }
 
@@ -268,10 +410,7 @@ export async function validatePublicLink(
     return { status: 410 as const, payload: { message: "This link has expired" } };
   }
 
-  if (link.usesConsumed >= link.maxUses) {
-    link.status = "consumed";
-    link.expiredAt = new Date();
-    scheduleCleanup(link);
+  if (markLinkConsumedIfOutOfUses(link)) {
     await link.save();
     return { status: 410 as const, payload: { message: "This link has expired" } };
   }
@@ -282,6 +421,13 @@ export async function validatePublicLink(
 
   link.lastDeviceType = deviceType;
   await link.save();
+
+  await recordAuditEvent({
+    linkId: String(link._id),
+    type: "desktop-link-validated",
+    message: "Desktop link opened",
+    metadata: { fingerprint: readClientFingerprint(req) },
+  });
 
   return {
     status: 200 as const,
@@ -317,10 +463,7 @@ export async function startViewerSession(
     return { status: 410 as const, payload: { message: "This link has expired" } };
   }
 
-  if (link.usesConsumed >= link.maxUses) {
-    link.status = "consumed";
-    link.expiredAt = new Date();
-    scheduleCleanup(link);
+  if (markLinkConsumedIfOutOfUses(link)) {
     await link.save();
     return { status: 410 as const, payload: { message: "This link has expired" } };
   }
@@ -334,19 +477,24 @@ export async function startViewerSession(
     return { status: 409 as const, payload: { message: "A secure session is already active" } };
   }
 
-  link.desktopOpenCount += 1;
-  await link.save();
-
   const session = await ViewerSessionModel.create({
     linkId: link._id,
     deviceType,
-    fingerprint: req.headers["x-client-fingerprint"] ?? null,
+    fingerprint: readClientFingerprint(req),
     fullscreenAccepted,
     warningCount: 0,
     status: "active",
     currentAssetIndex: 0,
+    currentAssetElapsedSeconds: 0,
     completedAssets: [],
+    escapeCount: 0,
+    resumeUsed: false,
+    pauseReason: null,
   });
+
+  link.lastDeviceType = deviceType;
+  link.desktopOpenCount += 1;
+  await link.save();
 
   await recordAuditEvent({
     linkId: String(link._id),
@@ -387,25 +535,24 @@ export async function recordAssetProgress(input: {
   assetId: string;
   event: "opened" | "completed";
 }) {
-  const session = await ViewerSessionModel.findById(input.sessionId);
-  if (!session) {
-    return { status: 404 as const, payload: { message: "Session not found" } };
+  const loaded = await loadSessionAndLink(input.sessionId);
+  if ("status" in loaded) {
+    return loaded;
   }
+
+  const { session, link } = loaded;
 
   if (session.status === "destroyed") {
     return { status: 410 as const, payload: { message: "This link has expired" } };
   }
 
-  const link = await SecureLinkModel.findById(session.linkId);
-  if (!link) {
-    return { status: 404 as const, payload: { message: "This link has expired" } };
+  if (session.status === "completed") {
+    return { status: 400 as const, payload: { message: "Session already completed" } };
   }
 
-  const assets = sortAssets(link.assets as unknown as LinkAssetRecord[]);
-  const currentAsset = assets[session.currentAssetIndex];
-
-  if (!currentAsset || currentAsset.assetId !== input.assetId) {
-    return { status: 400 as const, payload: { message: "Asset order mismatch" } };
+  const resolved = ensureCurrentAsset(link, session.currentAssetIndex, input.assetId);
+  if ("error" in resolved) {
+    return resolved.error;
   }
 
   const completedAssets = session.completedAssets as unknown as CompletedAssetRecord[];
@@ -418,8 +565,10 @@ export async function recordAssetProgress(input: {
         openedAt: new Date(),
         completedAt: null,
       });
+      session.markModified("completedAssets");
     } else if (!existing.openedAt) {
       existing.openedAt = new Date();
+      session.markModified("completedAssets");
     }
   }
 
@@ -436,10 +585,17 @@ export async function recordAssetProgress(input: {
         completedAt: new Date(),
       });
     }
+
     session.currentAssetIndex += 1;
+    session.currentAssetElapsedSeconds = 0;
+    session.markModified("completedAssets");
+
+    if (resolved.currentAsset.type === "image") {
+      clearIncompleteImageCutState(link, input.assetId);
+    }
   }
 
-  await session.save();
+  await Promise.all([session.save(), link.save()]);
 
   return {
     status: 200 as const,
@@ -452,17 +608,61 @@ export async function recordAssetProgress(input: {
   };
 }
 
+export async function recordSessionProgress(input: {
+  sessionId: string;
+  assetId: string;
+  elapsedSeconds: number;
+  durationSeconds?: number;
+}) {
+  const loaded = await loadSessionAndLink(input.sessionId);
+  if ("status" in loaded) {
+    return loaded;
+  }
+
+  const { session, link } = loaded;
+
+  if (session.status === "destroyed") {
+    return { status: 410 as const, payload: { message: "This link has expired" } };
+  }
+
+  if (session.status === "completed") {
+    return { status: 400 as const, payload: { message: "Session already completed" } };
+  }
+
+  if (session.status !== "active") {
+    return { status: 409 as const, payload: { message: "Session is paused" } };
+  }
+
+  const resolved = ensureCurrentAsset(link, session.currentAssetIndex, input.assetId);
+  if ("error" in resolved) {
+    return resolved.error;
+  }
+
+  const { currentAsset } = resolved;
+  const nextDuration =
+    currentAsset.type === "image"
+      ? link.imageDisplaySeconds
+      : Math.max(0, input.durationSeconds ?? currentAsset.durationSeconds ?? 0);
+  const nextElapsedSeconds = Math.min(Math.max(0, input.elapsedSeconds), nextDuration || input.elapsedSeconds);
+
+  session.currentAssetElapsedSeconds = nextElapsedSeconds;
+  updateLinkAssetDuration(link, input.assetId, input.durationSeconds);
+
+  await Promise.all([session.save(), link.save()]);
+
+  return {
+    status: 200 as const,
+    payload: { ok: true },
+  };
+}
+
 export async function finalizeSession(sessionId: string) {
-  const session = await ViewerSessionModel.findById(sessionId);
-  if (!session) {
-    return { status: 404 as const, payload: { message: "Session not found" } };
+  const loaded = await loadSessionAndLink(sessionId);
+  if ("status" in loaded) {
+    return loaded;
   }
 
-  const link = await SecureLinkModel.findById(session.linkId);
-  if (!link) {
-    return { status: 404 as const, payload: { message: "This link has expired" } };
-  }
-
+  const { session, link } = loaded;
   const completedAssets = session.completedAssets as unknown as CompletedAssetRecord[];
   const allAssetsCompleted = sortAssets(link.assets as unknown as LinkAssetRecord[]).every((asset) =>
     completedAssets.some((item) => item.assetId === asset.assetId && item.completedAt),
@@ -473,6 +673,8 @@ export async function finalizeSession(sessionId: string) {
   }
 
   session.status = "completed";
+  session.currentAssetElapsedSeconds = 0;
+  session.pauseReason = null;
   session.endedAt = new Date();
   await session.save();
 
@@ -507,19 +709,167 @@ export async function finalizeSession(sessionId: string) {
   };
 }
 
-export async function reportSuspiciousEvent(input: { sessionId: string; event: string }) {
-  const session = await ViewerSessionModel.findById(input.sessionId);
-  if (!session) {
-    return { status: 404 as const, payload: { message: "Session not found" } };
+export async function resumeViewerSession(sessionId: string) {
+  const loaded = await loadSessionAndLink(sessionId);
+  if ("status" in loaded) {
+    return loaded;
   }
 
-  const link = await SecureLinkModel.findById(session.linkId);
-  if (!link) {
-    return { status: 404 as const, payload: { message: "This link has expired" } };
+  const { session, link } = loaded;
+
+  if (["expired", "destroyed", "consumed"].includes(link.status)) {
+    return { status: 410 as const, payload: { message: "This link has expired" } };
+  }
+
+  if (session.status !== "warning") {
+    return { status: 400 as const, payload: { message: "Session is not waiting for resume" } };
+  }
+
+  if (session.pauseReason === "escape-key") {
+    if (session.resumeUsed) {
+      return { status: 410 as const, payload: { message: "Resume is no longer available" } };
+    }
+    session.resumeUsed = true;
+  }
+
+  session.status = "active";
+  session.pauseReason = null;
+  await session.save();
+
+  await recordAuditEvent({
+    linkId: String(link._id),
+    sessionId: String(session._id),
+    type: "session-resumed",
+    message:
+      session.resumeUsed && session.escapeCount > 0
+        ? "Viewer resumed after one-time escape pause"
+        : "Viewer resumed after warning pause",
+  });
+
+  return {
+    status: 200 as const,
+    payload: {
+      ok: true,
+      resumeUsed: session.resumeUsed,
+    },
+  };
+}
+
+export async function reportSuspiciousEvent(input: { sessionId: string; event: string }) {
+  const loaded = await loadSessionAndLink(input.sessionId);
+  if ("status" in loaded) {
+    return loaded;
+  }
+
+  const { session, link } = loaded;
+
+  if (session.status === "destroyed") {
+    return { status: 410 as const, payload: { message: "This link has expired" } };
+  }
+
+  if (session.status === "completed") {
+    return { status: 400 as const, payload: { message: "Session already completed" } };
+  }
+
+  if (["escape-key", "window-blur", "visibility-hidden"].includes(input.event)) {
+    const incompleteImageCut = await registerIncompleteImageCut({
+      link,
+      session: {
+        _id: session._id,
+        currentAssetIndex: session.currentAssetIndex,
+        currentAssetElapsedSeconds: session.currentAssetElapsedSeconds,
+        completedAssets: session.completedAssets as unknown as CompletedAssetRecord[],
+      },
+      event: input.event,
+    });
+
+    if (incompleteImageCut.expired) {
+      session.status = "destroyed";
+      session.pauseReason = input.event;
+      session.destroyReason = input.event;
+      session.endedAt = new Date();
+      await session.save();
+
+      await recordAuditEvent({
+        linkId: String(link._id),
+        sessionId: String(session._id),
+        type: "incomplete-image-expired-link",
+        message: "Link expired after the same secure image was cut twice",
+        metadata: { event: input.event, cutCount: incompleteImageCut.cutCount },
+      });
+
+      return {
+        status: 200 as const,
+        payload: {
+          destroyed: true,
+          sessionEnded: true,
+          resumeAllowed: false,
+          linkExpired: true,
+          message: "This link has expired",
+        },
+      };
+    }
+  }
+
+  if (input.event === "escape-key") {
+    session.escapeCount += 1;
+
+    await recordAuditEvent({
+      linkId: String(link._id),
+      sessionId: String(session._id),
+      type: "escape-key",
+      message: "Escape key pressed in secure viewer",
+      metadata: { escapeCount: session.escapeCount, resumeUsed: session.resumeUsed },
+    });
+
+    if (session.escapeCount >= 2) {
+      session.status = "destroyed";
+      session.pauseReason = "escape-key";
+      session.destroyReason = "escape-key";
+      session.endedAt = new Date();
+      await session.save();
+
+      await expireLink(link, "expired");
+
+      await recordAuditEvent({
+        linkId: String(link._id),
+        sessionId: String(session._id),
+        type: "escape-expired-link",
+        message: "Link expired after second escape press",
+      });
+
+      return {
+        status: 200 as const,
+        payload: {
+          destroyed: true,
+          sessionEnded: true,
+          resumeAllowed: false,
+          linkExpired: true,
+          message: "This link has expired",
+        },
+      };
+    }
+
+    session.status = "warning";
+    session.pauseReason = "escape-key";
+    await session.save();
+
+    return {
+      status: 200 as const,
+      payload: {
+        destroyed: false,
+        sessionEnded: false,
+        resumeAllowed: !session.resumeUsed,
+        message: session.resumeUsed
+          ? "Secure view paused, but the one-time resume is already used."
+          : "Secure view paused. You can resume only once.",
+      },
+    };
   }
 
   session.warningCount += 1;
   session.status = session.warningCount >= 2 ? "destroyed" : "warning";
+  session.pauseReason = session.warningCount >= 2 ? session.pauseReason : input.event;
 
   await recordAuditEvent({
     linkId: String(link._id),
@@ -551,6 +901,8 @@ export async function reportSuspiciousEvent(input: { sessionId: string; event: s
     status: 200 as const,
     payload: {
       destroyed: false,
+      sessionEnded: false,
+      resumeAllowed: true,
       message: "Screenshot/Recording not allowed",
       warningCount: session.warningCount,
     },
@@ -569,15 +921,13 @@ export async function destroySessionOrLink(input: { sessionId?: string; token?: 
 
   if (session) {
     session.status = "destroyed";
+    session.pauseReason = null;
     session.destroyReason = input.reason;
     session.endedAt = new Date();
     await session.save();
   }
 
-  link.status = "destroyed";
-  link.expiredAt = new Date();
-  scheduleCleanup(link);
-  await link.save();
+  await expireLink(link, "destroyed");
 
   await recordAuditEvent({
     linkId: String(link._id),

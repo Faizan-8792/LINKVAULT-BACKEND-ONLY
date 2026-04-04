@@ -4,6 +4,9 @@ import {
   defaultMobileMessage,
   interpolateMobileMessage,
   limitationCopy,
+  resumeSessionSchema,
+  sessionProgressSchema,
+  suspiciousEventSchema,
 } from "./index";
 
 describe("shared contract helpers", () => {
@@ -36,5 +39,29 @@ describe("shared contract helpers", () => {
     });
 
     expect(parsed.assets[0].storageKey).toBe("storage-1.png");
+  });
+
+  it("accepts escape-key as a suspicious event", () => {
+    expect(suspiciousEventSchema.parse("escape-key")).toBe("escape-key");
+  });
+
+  it("accepts session progress payloads", () => {
+    const parsed = sessionProgressSchema.parse({
+      sessionId: "session-123456",
+      assetId: "asset-1",
+      elapsedSeconds: 20,
+      durationSeconds: 100,
+    });
+
+    expect(parsed.elapsedSeconds).toBe(20);
+    expect(parsed.durationSeconds).toBe(100);
+  });
+
+  it("accepts resume session payloads", () => {
+    expect(
+      resumeSessionSchema.parse({
+        sessionId: "session-123456",
+      }).sessionId,
+    ).toBe("session-123456");
   });
 });

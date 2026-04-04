@@ -12,6 +12,7 @@ import { SecureLinkModel } from "../models/SecureLink.js";
 import { UserModel } from "../models/User.js";
 import { ViewerSessionModel } from "../models/ViewerSession.js";
 import { storageProvider } from "../storage/storage.js";
+import { buildAdminTracking } from "../services/linkTracking.js";
 import { createSecureLink, removeAssetIfUnreferenced } from "../services/links.js";
 import { asyncHandler } from "../utils/http.js";
 
@@ -132,8 +133,40 @@ adminRouter.get(
   "/links",
   asyncHandler(async (_req, res) => {
     const links = await SecureLinkModel.find().sort({ createdAt: -1 });
+    const linkIds = links.map((link) => link._id);
+    const sessions =
+      linkIds.length > 0
+        ? await ViewerSessionModel.find({ linkId: { $in: linkIds } }).sort({ createdAt: -1 })
+        : [];
+
+    const activeSessionByLinkId = new Map<string, any>();
+    const latestSessionByLinkId = new Map<string, any>();
+
+    for (const session of sessions) {
+      const linkId = String(session.linkId);
+      if (!latestSessionByLinkId.has(linkId)) {
+        latestSessionByLinkId.set(linkId, session);
+      }
+      if (!activeSessionByLinkId.has(linkId) && ["active", "warning"].includes(session.status)) {
+        activeSessionByLinkId.set(linkId, session);
+      }
+    }
+
     res.json({
       links: links.map((link) => ({
+        ...buildAdminTracking({
+          linkStatus: link.status,
+          usesConsumed: link.usesConsumed,
+          imageDisplaySeconds: link.imageDisplaySeconds,
+          assets: link.assets.map((asset: any) => ({
+            assetId: asset.assetId,
+            type: asset.type,
+            durationSeconds: asset.durationSeconds,
+            order: asset.order,
+          })),
+          activeSession: activeSessionByLinkId.get(String(link._id)),
+          latestSession: latestSessionByLinkId.get(String(link._id)),
+        }),
         id: String(link._id),
         recipientName: link.recipientName,
         status: link.status,
@@ -141,6 +174,7 @@ adminRouter.get(
         usesConsumed: link.usesConsumed,
         mobileOpenCount: link.mobileOpenCount,
         desktopOpenCount: link.desktopOpenCount,
+        viewerUrl: link.viewerUrl ?? null,
         replacementParentId: link.replacementParentId ? String(link.replacementParentId) : null,
         replacementChildId: link.replacementChildId ? String(link.replacementChildId) : null,
         createdAt: link.createdAt.toISOString(),
@@ -159,7 +193,25 @@ adminRouter.get(
       return res.status(404).json({ message: "Link not found" });
     }
 
+    const sessions = await ViewerSessionModel.find({ linkId: link._id }).sort({ createdAt: -1 });
+    const activeSession = sessions.find((session) => ["active", "warning"].includes(session.status)) ?? null;
+    const latestSession = sessions[0] ?? null;
+    const tracking = buildAdminTracking({
+      linkStatus: link.status,
+      usesConsumed: link.usesConsumed,
+      imageDisplaySeconds: link.imageDisplaySeconds,
+      assets: link.assets.map((asset: any) => ({
+        assetId: asset.assetId,
+        type: asset.type,
+        durationSeconds: asset.durationSeconds,
+        order: asset.order,
+      })),
+      activeSession,
+      latestSession,
+    });
+
     return res.json({
+      ...tracking,
       id: String(link._id),
       recipientName: link.recipientName,
       status: link.status,
@@ -170,6 +222,7 @@ adminRouter.get(
       mobileMessageTemplate: link.mobileMessageTemplate,
       mobileOpenCount: link.mobileOpenCount,
       desktopOpenCount: link.desktopOpenCount,
+      viewerUrl: link.viewerUrl ?? null,
       replacementParentId: link.replacementParentId ? String(link.replacementParentId) : null,
       replacementChildId: link.replacementChildId ? String(link.replacementChildId) : null,
       warning: link.warningMessage,

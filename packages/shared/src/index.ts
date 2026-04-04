@@ -45,6 +45,7 @@ export const suspiciousEventSchema = z.enum([
   "fullscreen-exit",
   "pause-attempt",
   "button-tap-attempt",
+  "escape-key",
   "manual-destroy",
 ]);
 export type SuspiciousEventType = z.infer<typeof suspiciousEventSchema>;
@@ -108,6 +109,19 @@ export const suspiciousReportSchema = z.object({
   event: suspiciousEventSchema,
 });
 export type SuspiciousReportInput = z.infer<typeof suspiciousReportSchema>;
+
+export const sessionProgressSchema = z.object({
+  sessionId: z.string().min(12),
+  assetId: z.string().min(1),
+  elapsedSeconds: z.number().min(0).max(86400),
+  durationSeconds: z.number().min(0).max(86400).optional(),
+});
+export type SessionProgressInput = z.infer<typeof sessionProgressSchema>;
+
+export const resumeSessionSchema = z.object({
+  sessionId: z.string().min(12),
+});
+export type ResumeSessionInput = z.infer<typeof resumeSessionSchema>;
 
 export const consumeContentSchema = z.object({
   sessionId: z.string().min(12),

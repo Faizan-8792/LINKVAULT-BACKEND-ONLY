@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
@@ -36,6 +36,11 @@ type LinkItem = {
   usesConsumed: number;
   mobileOpenCount: number;
   desktopOpenCount: number;
+  viewerUrl: string | null;
+  trackingState: string;
+  consumedPercent: number;
+  consumedSeconds: number;
+  totalDurationSeconds: number;
   replacementParentId: string | null;
   replacementChildId: string | null;
   createdAt: string;
@@ -282,7 +287,6 @@ function PendingApprovalCard({ userName }: { userName: string }) {
 }
 
 function Dashboard({ userName }: { userName: string }) {
-  const queryClient = useQueryClient();
   const [files, setFiles] = useState<File[]>([]);
   const [uploadedAssets, setUploadedAssets] = useState<UploadedAsset[]>([]);
   const [recipientName, setRecipientName] = useState("");
@@ -306,16 +310,22 @@ function Dashboard({ userName }: { userName: string }) {
       const response = await api.get<{ links: LinkItem[] }>("/api/admin/links");
       return response.data.links;
     },
+    refetchInterval: 3000,
+    refetchIntervalInBackground: true,
   });
 
   const uploadMutation = useMutation({
     mutationFn: async () => {
+      const durationSeconds = await Promise.all(files.map((file) => readMediaDurationSeconds(file)));
       const formData = new FormData();
       files.forEach((file) => formData.append("files", file));
       const response = await api.post<{ assets: UploadedAsset[] }>("/api/admin/uploads", formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
-      return response.data.assets;
+      return response.data.assets.map((asset, index) => ({
+        ...asset,
+        durationSeconds: durationSeconds[index] ?? asset.durationSeconds,
+      }));
     },
     onSuccess(assets) {
       setUploadedAssets((current) =>
@@ -653,64 +663,147 @@ function Dashboard({ userName }: { userName: string }) {
                 No secure links generated yet.
               </div>
             ) : (
-              linksQuery.data?.map((link) => (
-                <div key={link.id} className="rounded-2xl bg-white/75 p-4 shadow-sm">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <p className="font-semibold text-slate-900">{link.recipientName}</p>
-                      <p className="mt-1 text-sm text-slate-500">
-                        {link.assetCount} asset(s) | {link.usesConsumed}/{link.maxUses} uses
+              linksQuery.data?.map((link) => {
+                const consumedPercent = normalizeTrackingNumber(link.consumedPercent);
+                const consumedSeconds = normalizeTrackingNumber(link.consumedSeconds);
+                const totalDurationSeconds = normalizeTrackingNumber(link.totalDurationSeconds);
+
+                return (
+                  <div key={link.id} className="rounded-2xl bg-white/75 p-4 shadow-sm">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="font-semibold text-slate-900">{link.recipientName}</p>
+                        <p className="mt-1 text-sm text-slate-500">
+                          {link.assetCount} asset(s) | {link.usesConsumed}/{link.maxUses} uses
+                        </p>
+                        <p className="mt-2 text-sm font-semibold text-brand-700">
+                          {formatTrackingState(link.trackingState)} | Consumed {consumedPercent}%
+                        </p>
+                        {totalDurationSeconds > 0 && (
+                          <p className="mt-1 text-xs text-slate-500">
+                            {consumedSeconds}s of {totalDurationSeconds}s watched
+                          </p>
+                        )}
+                        {link.replacementParentId && (
+                          <p className="mt-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-700">
+                            Child of this link chain
+                          </p>
+                        )}
+                        {link.replacementChildId && (
+                          <p className="mt-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-700">
+                            Has replacement child
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <StatusPill status={link.status} />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (window.confirm("Delete this secure link and all of its tracking data?")) {
+                              deleteLinkMutation.mutate(link.id);
+                            }
+                          }}
+                          disabled={deleteLinkMutation.isPending}
+                          className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700 transition hover:bg-rose-100 disabled:opacity-60"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                    <div className="mt-4 grid grid-cols-3 gap-3 text-center text-xs text-slate-500">
+                      <div className="rounded-2xl bg-brand-50 p-3">
+                        <p className="font-semibold text-brand-700">{link.mobileOpenCount}</p>
+                        <p>Mobile views</p>
+                      </div>
+                      <div className="rounded-2xl bg-brand-50 p-3">
+                        <p className="font-semibold text-brand-700">{link.desktopOpenCount}</p>
+                        <p>Desktop</p>
+                      </div>
+                      <div className="rounded-2xl bg-brand-50 p-3">
+                        <p className="font-semibold text-brand-700">{new Date(link.createdAt).toLocaleDateString()}</p>
+                        <p>Created</p>
+                      </div>
+                    </div>
+                    <div className="mt-4 rounded-2xl bg-slate-950/95 p-4 text-slate-100">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-200">
+                          Link for this section
+                        </p>
+                        {link.viewerUrl && (
+                          <button
+                            type="button"
+                            onClick={() => void navigator.clipboard.writeText(link.viewerUrl ?? "")}
+                            className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs font-semibold text-white"
+                          >
+                            <Copy className="h-3.5 w-3.5" />
+                            Copy link
+                          </button>
+                        )}
+                      </div>
+                      <p className="mt-3 break-all text-sm text-slate-200">
+                        {link.viewerUrl ?? "Legacy link URL unavailable for this record."}
                       </p>
-                      {link.replacementParentId && (
-                        <p className="mt-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-700">
-                          Child of this link chain
-                        </p>
-                      )}
-                      {link.replacementChildId && (
-                        <p className="mt-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-700">
-                          Has replacement child
-                        </p>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <StatusPill status={link.status} />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (window.confirm("Delete this secure link and all of its tracking data?")) {
-                            deleteLinkMutation.mutate(link.id);
-                          }
-                        }}
-                        disabled={deleteLinkMutation.isPending}
-                        className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700 transition hover:bg-rose-100 disabled:opacity-60"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                        Delete
-                      </button>
                     </div>
                   </div>
-                  <div className="mt-4 grid grid-cols-3 gap-3 text-center text-xs text-slate-500">
-                    <div className="rounded-2xl bg-brand-50 p-3">
-                      <p className="font-semibold text-brand-700">{link.mobileOpenCount}</p>
-                      <p>Mobile views</p>
-                    </div>
-                    <div className="rounded-2xl bg-brand-50 p-3">
-                      <p className="font-semibold text-brand-700">{link.desktopOpenCount}</p>
-                      <p>Desktop</p>
-                    </div>
-                    <div className="rounded-2xl bg-brand-50 p-3">
-                      <p className="font-semibold text-brand-700">{new Date(link.createdAt).toLocaleDateString()}</p>
-                      <p>Created</p>
-                    </div>
-                  </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         </div>
       </section>
     </div>
   );
+}
+
+async function readMediaDurationSeconds(file: File) {
+  if (!file.type.startsWith("audio/") && !file.type.startsWith("video/")) {
+    return null;
+  }
+
+  const objectUrl = URL.createObjectURL(file);
+
+  try {
+    return await new Promise<number | null>((resolve) => {
+      const element = document.createElement(file.type.startsWith("audio/") ? "audio" : "video");
+
+      element.preload = "metadata";
+      element.onloadedmetadata = () => {
+        const durationSeconds = Number.isFinite(element.duration) ? Math.max(0, element.duration) : null;
+        resolve(durationSeconds);
+      };
+      element.onerror = () => resolve(null);
+      element.src = objectUrl;
+    });
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+function formatTrackingState(trackingState: string) {
+  switch (trackingState) {
+    case "viewing":
+      return "Viewing live";
+    case "paused":
+      return "Paused";
+    case "completed":
+      return "Completed";
+    case "expired":
+      return "Expired";
+    case "destroyed":
+      return "Destroyed";
+    default:
+      return "Waiting";
+  }
+}
+
+function normalizeTrackingNumber(value: number | null | undefined) {
+  if (typeof value !== "number" || Number.isNaN(value) || !Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.round(value));
 }
 
 function PasswordField({

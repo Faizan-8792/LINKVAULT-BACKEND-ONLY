@@ -31,7 +31,33 @@ type SessionState = {
 };
 
 const DEAD_LINK_REDIRECT_URL = "https://linkvault-expired-link.invalid";
-const HOVER_OPEN_DELAY_MS = 1000;
+const AUTO_OPEN_DELAY_MS = 5000;
+const VALIDATION_CACHE_TTL_MS = 3000;
+const validationRequestCache = new Map<string, { createdAt: number; promise: Promise<any> }>();
+
+function loadValidatedLink(token: string) {
+  const cached = validationRequestCache.get(token);
+  if (cached && Date.now() - cached.createdAt < VALIDATION_CACHE_TTL_MS) {
+    return cached.promise;
+  }
+
+  const promise = api
+    .post("/api/public/validate-link", {
+      token,
+      deviceContext: getViewerDeviceContext(),
+    })
+    .then((response) => response.data);
+
+  validationRequestCache.set(token, { createdAt: Date.now(), promise });
+  window.setTimeout(() => {
+    const current = validationRequestCache.get(token);
+    if (current?.promise === promise) {
+      validationRequestCache.delete(token);
+    }
+  }, VALIDATION_CACHE_TTL_MS);
+
+  return promise;
+}
 
 export function ViewerPage() {
   const { token = "" } = useParams();
@@ -39,57 +65,136 @@ export function ViewerPage() {
   const [validationState, setValidationState] = useState<ValidationState>({ kind: "loading" });
   const [sessionState, setSessionState] = useState<SessionState | null>(null);
   const [warningOverlay, setWarningOverlay] = useState<string | null>(null);
+  const [resumeMode, setResumeMode] = useState<"warning" | "escape" | null>(null);
+  const [resumeAllowed, setResumeAllowed] = useState(false);
   const [contentHidden, setContentHidden] = useState(false);
   const [isFinalizing, setIsFinalizing] = useState(false);
   const [isOpeningContent, setIsOpeningContent] = useState(false);
-  const [isHoverCountdownActive, setIsHoverCountdownActive] = useState(false);
+  const [isResuming, setIsResuming] = useState(false);
   const completedFinalization = useRef(false);
-  const hoverOpenTimerRef = useRef<number | null>(null);
+  const autoOpenTimerRef = useRef<number | null>(null);
   const sessionStateRef = useRef<SessionState | null>(null);
   const isOpeningContentRef = useRef(false);
+  const lastProgressByAssetRef = useRef<Record<string, number>>({});
 
-  const cancelHoverOpenCountdown = useCallback(() => {
-    if (hoverOpenTimerRef.current !== null) {
-      window.clearTimeout(hoverOpenTimerRef.current);
-      hoverOpenTimerRef.current = null;
+  const cancelAutoOpenCountdown = useCallback(() => {
+    if (autoOpenTimerRef.current !== null) {
+      window.clearTimeout(autoOpenTimerRef.current);
+      autoOpenTimerRef.current = null;
     }
-    setIsHoverCountdownActive(false);
   }, []);
 
   const reportSuspicious = useCallback(
     async (eventName: string, customMessage?: string) => {
-      if (!sessionState) {
+      const session = sessionStateRef.current;
+      if (!session) {
         return;
       }
 
       setContentHidden(true);
       try {
         const response = await api.post("/api/public/report-suspicious", {
-          sessionId: sessionState.sessionId,
+          sessionId: session.sessionId,
           event: eventName,
         });
 
-        if (response.data.sessionEnded) {
-          setSessionState(null);
-          setWarningOverlay(response.data.message);
-          setContentHidden(false);
-          return;
-        }
-
-        if (response.data.destroyed) {
+        if (response.data.linkExpired || response.data.destroyed) {
           redirectToDeadLinkPage();
           return;
         }
 
+        if (response.data.sessionEnded) {
+          setSessionState(null);
+          setWarningOverlay(response.data.message);
+          setResumeMode(null);
+          setResumeAllowed(false);
+          setContentHidden(false);
+          return;
+        }
+
         setSessionState((current) =>
-          current ? { ...current, warningCount: response.data.warningCount } : current,
+          current
+            ? {
+                ...current,
+                warningCount:
+                  typeof response.data.warningCount === "number"
+                    ? response.data.warningCount
+                    : current.warningCount,
+              }
+            : current,
         );
+        setResumeAllowed(Boolean(response.data.resumeAllowed));
+        setResumeMode(eventName === "escape-key" ? "escape" : response.data.resumeAllowed ? "warning" : null);
         setWarningOverlay(customMessage ?? response.data.message);
       } catch {
         redirectToDeadLinkPage();
       }
     },
-    [sessionState],
+    [],
+  );
+
+  const resumeViewing = useCallback(async () => {
+    const session = sessionStateRef.current;
+    if (!session) {
+      return;
+    }
+
+    setIsResuming(true);
+    try {
+      await api.post("/api/public/resume-session", {
+        sessionId: session.sessionId,
+      });
+      setWarningOverlay(null);
+      setResumeMode(null);
+      setResumeAllowed(false);
+      setContentHidden(false);
+    } catch (error: any) {
+      const message = String(error?.response?.data?.message ?? "");
+      if (message.toLowerCase().includes("expired")) {
+        redirectToDeadLinkPage();
+        return;
+      }
+      setWarningOverlay(message || "Unable to resume secure viewing.");
+    } finally {
+      setIsResuming(false);
+    }
+  }, []);
+
+  const reportSessionProgress = useCallback(
+    async (assetId: string, elapsedSeconds: number, durationSeconds?: number | null) => {
+      const session = sessionStateRef.current;
+      if (!session) {
+        return;
+      }
+
+      const nextElapsedSeconds = Math.max(0, Math.floor(elapsedSeconds));
+      const cacheKey = `${session.sessionId}:${assetId}`;
+      const lastElapsedSeconds = lastProgressByAssetRef.current[cacheKey];
+
+      if (lastElapsedSeconds === nextElapsedSeconds) {
+        return;
+      }
+
+      lastProgressByAssetRef.current[cacheKey] = nextElapsedSeconds;
+
+      try {
+        await api.post("/api/public/session-progress", {
+          sessionId: session.sessionId,
+          assetId,
+          elapsedSeconds: nextElapsedSeconds,
+          durationSeconds:
+            typeof durationSeconds === "number" && Number.isFinite(durationSeconds)
+              ? durationSeconds
+              : undefined,
+        });
+      } catch (error: any) {
+        const message = String(error?.response?.data?.message ?? "");
+        if (message.toLowerCase().includes("expired")) {
+          redirectToDeadLinkPage();
+        }
+      }
+    },
+    [],
   );
 
   useEffect(() => {
@@ -97,25 +202,22 @@ export function ViewerPage() {
 
     async function validate() {
       try {
-        const response = await api.post("/api/public/validate-link", {
-          token,
-          deviceContext: getViewerDeviceContext(),
-        });
+        const response = await loadValidatedLink(token);
         if (cancelled) {
           return;
         }
 
-        if (response.data.mode === "mobile") {
+        if (response.mode === "mobile") {
           setValidationState({
             kind: "mobile",
-            message: response.data.message,
-            replacementKind: response.data.replacementKind ?? "permanent-expired",
-            replacementUrl: response.data.replacementUrl,
+            message: response.message,
+            replacementKind: response.replacementKind ?? "permanent-expired",
+            replacementUrl: response.replacementUrl,
           });
           return;
         }
 
-        setValidationState({ kind: "ready", link: response.data.link });
+        setValidationState({ kind: "ready", link: response.link });
       } catch {
         redirectToDeadLinkPage();
       }
@@ -136,13 +238,31 @@ export function ViewerPage() {
     isOpeningContentRef.current = isOpeningContent;
   }, [isOpeningContent]);
 
-  useEffect(() => cancelHoverOpenCountdown, [cancelHoverOpenCountdown]);
+  useEffect(() => cancelAutoOpenCountdown, [cancelAutoOpenCountdown]);
 
   useViewerSecurity({
     enabled: Boolean(sessionState),
     fullscreenRequired: Boolean(sessionState?.fullscreenAccepted),
     onSuspicious: (eventName) => reportSuspicious(eventName),
   });
+
+  useEffect(() => {
+    if (!sessionState) {
+      return;
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") {
+        return;
+      }
+
+      event.preventDefault();
+      void reportSuspicious("escape-key");
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [reportSuspicious, sessionState]);
 
   useEffect(() => {
     if (!sessionState || contentHidden) {
@@ -186,6 +306,8 @@ export function ViewerPage() {
             return;
           }
           setWarningOverlay(response.data.message);
+          setResumeMode(null);
+          setResumeAllowed(false);
           setContentHidden(true);
         })
         .catch(() => redirectToDeadLinkPage())
@@ -228,11 +350,18 @@ export function ViewerPage() {
           replacementUrl: response.data.replacementUrl,
         });
         setSessionState(null);
+        setWarningOverlay(null);
+        setResumeMode(null);
+        setResumeAllowed(false);
         return;
       }
 
       setSessionState({ ...response.data, fullscreenAccepted });
+      lastProgressByAssetRef.current = {};
+      completedFinalization.current = false;
       setWarningOverlay(null);
+      setResumeMode(null);
+      setResumeAllowed(false);
       setContentHidden(false);
     } catch (error: any) {
       const message = String(error?.response?.data?.message ?? "");
@@ -249,35 +378,41 @@ export function ViewerPage() {
       return;
     }
 
-    cancelHoverOpenCountdown();
+    cancelAutoOpenCountdown();
     isOpeningContentRef.current = true;
     setIsOpeningContent(true);
     void openContent().finally(() => {
       isOpeningContentRef.current = false;
       setIsOpeningContent(false);
     });
-  }, [cancelHoverOpenCountdown, openContent]);
+  }, [cancelAutoOpenCountdown, openContent]);
 
-  const startHoverOpenCountdown = useCallback(() => {
-    if (isOpeningContentRef.current || sessionStateRef.current || hoverOpenTimerRef.current !== null) {
+  useEffect(() => {
+    if (validationState.kind !== "ready" || sessionState) {
+      cancelAutoOpenCountdown();
       return;
     }
 
-    setIsHoverCountdownActive(true);
-    hoverOpenTimerRef.current = window.setTimeout(() => {
-      hoverOpenTimerRef.current = null;
-      setIsHoverCountdownActive(false);
+    if (autoOpenTimerRef.current !== null || isOpeningContentRef.current) {
+      return;
+    }
+
+    autoOpenTimerRef.current = window.setTimeout(() => {
+      autoOpenTimerRef.current = null;
       triggerOpenContent();
-    }, HOVER_OPEN_DELAY_MS);
-  }, [triggerOpenContent]);
+    }, AUTO_OPEN_DELAY_MS);
+
+    return cancelAutoOpenCountdown;
+  }, [cancelAutoOpenCountdown, sessionState, triggerOpenContent, validationState.kind]);
 
   async function markAssetProgress(assetId: string, event: "opened" | "completed") {
-    if (!sessionState) {
+    const session = sessionStateRef.current;
+    if (!session) {
       return;
     }
 
     const response = await api.post("/api/public/asset-progress", {
-      sessionId: sessionState.sessionId,
+      sessionId: session.sessionId,
       assetId,
       event,
     });
@@ -340,36 +475,31 @@ export function ViewerPage() {
                 Content ready for {validationState.link.recipientName}
               </h2>
               <p className="mt-4 leading-7 text-slate-600">
-                Hover for 1 second or click the button to open in secure viewer mode.
+                Desktop par link validate hote hi content 5 seconds me automatically open ho jayega. Aap chahein to
+                button tap karke abhi bhi turant open kar sakte hain.
               </p>
               <div className="mt-8 grid gap-4 md:grid-cols-3">
                 <InfoChip label="Assets" value={validationState.link.assets.length} />
                 <InfoChip label="Remaining uses" value={validationState.link.remainingUses} />
                 <InfoChip label="Image timer" value={`${validationState.link.imageDisplaySeconds}s`} />
               </div>
-              <motion.button
+              <button
                 type="button"
                 onClick={triggerOpenContent}
-                onMouseEnter={startHoverOpenCountdown}
-                onMouseLeave={cancelHoverOpenCountdown}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" || event.key === " ") {
                     event.preventDefault();
                     triggerOpenContent();
                   }
                 }}
-                whileHover={{ scale: 1.02 }}
-                animate={{ scale: [1, 1.03, 1], y: [0, -2, 0] }}
-                transition={{ duration: 1.4, repeat: Infinity }}
-                className="mt-8 inline-flex items-center gap-3 rounded-2xl bg-brand-600 px-6 py-4 text-base font-semibold text-white shadow-halo"
+                className="mt-8 inline-flex items-center gap-3 rounded-2xl bg-brand-600 px-6 py-4 text-base font-semibold text-white shadow-halo disabled:opacity-70"
+                disabled={isOpeningContent}
               >
                 <Sparkles className="h-5 w-5" />
-                {isHoverCountdownActive ? "Hovering... opening soon" : "Hover 1s or click to open"}
-              </motion.button>
+                {isOpeningContent ? "Opening secure viewer..." : "Tap to open now"}
+              </button>
               <p className="mt-3 text-sm font-semibold text-brand-700">
-                {isHoverCountdownActive
-                  ? "Keep hovering to begin secure viewing"
-                  : "Hover and hold for 1 second, or click once, to begin secure viewing"}
+                Desktop auto-open runs after 5 seconds. Tap once if you want to start immediately.
               </p>
             </div>
 
@@ -380,7 +510,7 @@ export function ViewerPage() {
                   <RuleRow icon={Monitor} text="Mobile opens never consume the link." />
                   <RuleRow icon={ImageIcon} text="Images open only on explicit reveal and auto-close on a timer." />
                   <RuleRow icon={PlayCircle} text="Video and audio must run to completion with custom locked playback." />
-                  <RuleRow icon={ShieldAlert} text="Suspicious events warn once, then destroy the session." />
+                  <RuleRow icon={ShieldAlert} text="First Esc allows one resume. Second Esc expires the link." />
                 </div>
               </div>
             </div>
@@ -424,19 +554,27 @@ export function ViewerPage() {
                     <div>
                       <p className="font-semibold">{warningOverlay}</p>
                       <p className="mt-2 text-sm">
-                        Suspicious behavior was detected. Content stays hidden until you choose to resume.
+                        {resumeMode === "escape"
+                          ? "Escape paused the viewer. You have one server-approved resume for this session."
+                          : resumeAllowed
+                            ? "Suspicious behavior was detected. Content stays hidden until you choose to resume."
+                            : "This secure session is no longer resumable from the current state."}
                       </p>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setWarningOverlay(null);
-                          setContentHidden(false);
-                        }}
-                        data-allow-secure-action="true"
-                        className="mt-4 rounded-full bg-amber-600 px-4 py-2 text-sm font-semibold text-white"
-                      >
-                        Resume secure viewing
-                      </button>
+                      {resumeAllowed && (
+                        <button
+                          type="button"
+                          onClick={() => void resumeViewing()}
+                          data-allow-secure-action="true"
+                          disabled={isResuming}
+                          className="mt-4 rounded-full bg-amber-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-70"
+                        >
+                          {isResuming
+                            ? "Resuming secure viewing..."
+                            : resumeMode === "escape"
+                              ? "Use one-time resume"
+                              : "Resume secure viewing"}
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -460,6 +598,9 @@ export function ViewerPage() {
                   src={assetUrl(currentAsset.id)}
                   onOpened={() => markAssetProgress(currentAsset.id, "opened")}
                   onCompleted={() => markAssetProgress(currentAsset.id, "completed")}
+                  onProgress={(elapsedSeconds, durationSeconds) =>
+                    reportSessionProgress(currentAsset.id, elapsedSeconds, durationSeconds)
+                  }
                   onPauseAttempt={() => {
                     void reportSuspicious("pause-attempt", "Not allowed");
                   }}
@@ -646,6 +787,7 @@ function AssetStage({
   src,
   onOpened,
   onCompleted,
+  onProgress,
   onPauseAttempt,
 }: {
   asset: SecureAsset;
@@ -653,6 +795,7 @@ function AssetStage({
   src: string;
   onOpened: () => void | Promise<void>;
   onCompleted: () => void | Promise<void>;
+  onProgress: (elapsedSeconds: number, durationSeconds?: number | null) => void | Promise<void>;
   onPauseAttempt: () => void;
 }) {
   if (asset.type === "image") {
@@ -663,15 +806,34 @@ function AssetStage({
         imageDisplaySeconds={imageDisplaySeconds}
         onOpened={onOpened}
         onCompleted={onCompleted}
+        onProgress={onProgress}
       />
     );
   }
 
   if (asset.type === "video") {
-    return <SecureVideoStage asset={asset} src={src} onOpened={onOpened} onCompleted={onCompleted} onPauseAttempt={onPauseAttempt} />;
+    return (
+      <SecureVideoStage
+        asset={asset}
+        src={src}
+        onOpened={onOpened}
+        onCompleted={onCompleted}
+        onProgress={onProgress}
+        onPauseAttempt={onPauseAttempt}
+      />
+    );
   }
 
-  return <SecureAudioStage asset={asset} src={src} onOpened={onOpened} onCompleted={onCompleted} onPauseAttempt={onPauseAttempt} />;
+  return (
+    <SecureAudioStage
+      asset={asset}
+      src={src}
+      onOpened={onOpened}
+      onCompleted={onCompleted}
+      onProgress={onProgress}
+      onPauseAttempt={onPauseAttempt}
+    />
+  );
 }
 
 function SecureImageStage({
@@ -680,12 +842,14 @@ function SecureImageStage({
   imageDisplaySeconds,
   onOpened,
   onCompleted,
+  onProgress,
 }: {
   asset: SecureAsset;
   src: string;
   imageDisplaySeconds: number;
   onOpened: () => void | Promise<void>;
   onCompleted: () => void | Promise<void>;
+  onProgress: (elapsedSeconds: number, durationSeconds?: number | null) => void | Promise<void>;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [revealed, setRevealed] = useState(false);
@@ -701,7 +865,8 @@ function SecureImageStage({
     setSecondsLeft(imageDisplaySeconds);
     setRevealed(true);
     void onOpened();
-  }, [imageDisplaySeconds, onOpened]);
+    void onProgress(0, imageDisplaySeconds);
+  }, [imageDisplaySeconds, onOpened, onProgress]);
 
   useEffect(() => {
     if (!revealed || !canvasRef.current) {
@@ -736,16 +901,19 @@ function SecureImageStage({
       setSecondsLeft((current) => {
         if (current <= 1) {
           window.clearInterval(interval);
+          void onProgress(imageDisplaySeconds, imageDisplaySeconds);
           void onCompleted();
           setRevealed(false);
           return 0;
         }
-        return current - 1;
+        const nextValue = current - 1;
+        void onProgress(imageDisplaySeconds - nextValue, imageDisplaySeconds);
+        return nextValue;
       });
     }, 1000);
 
     return () => window.clearInterval(interval);
-  }, [onCompleted, revealed]);
+  }, [imageDisplaySeconds, onCompleted, onProgress, revealed]);
 
   if (!revealed) {
     return (
@@ -778,17 +946,20 @@ function SecureVideoStage({
   src,
   onOpened,
   onCompleted,
+  onProgress,
   onPauseAttempt,
 }: {
   asset: SecureAsset;
   src: string;
   onOpened: () => void | Promise<void>;
   onCompleted: () => void | Promise<void>;
+  onProgress: (elapsedSeconds: number, durationSeconds?: number | null) => void | Promise<void>;
   onPauseAttempt: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const lastTimeRef = useRef(0);
   const openedRef = useRef(false);
+  const reportedSecondRef = useRef(-1);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -797,6 +968,24 @@ function SecureVideoStage({
     }
     void video.play().catch(() => undefined);
   }, []);
+
+  const reportCurrentProgress = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) {
+      return;
+    }
+
+    const elapsedSeconds = Math.max(0, Math.floor(video.currentTime));
+    if (reportedSecondRef.current === elapsedSeconds) {
+      return;
+    }
+
+    reportedSecondRef.current = elapsedSeconds;
+    void onProgress(
+      elapsedSeconds,
+      Number.isFinite(video.duration) ? Math.max(0, video.duration) : undefined,
+    );
+  }, [onProgress]);
 
   return (
     <div className="rounded-[28px] bg-slate-950 p-4">
@@ -818,6 +1007,11 @@ function SecureVideoStage({
             openedRef.current = true;
             void onOpened();
           }
+          reportCurrentProgress();
+        }}
+        onLoadedMetadata={() => {
+          reportedSecondRef.current = -1;
+          reportCurrentProgress();
         }}
         onPause={() => {
           const video = videoRef.current;
@@ -833,6 +1027,7 @@ function SecureVideoStage({
             return;
           }
           lastTimeRef.current = video.currentTime;
+          reportCurrentProgress();
         }}
         onSeeking={() => {
           const video = videoRef.current;
@@ -844,6 +1039,11 @@ function SecureVideoStage({
           }
         }}
         onEnded={() => {
+          const video = videoRef.current;
+          void onProgress(
+            Math.max(0, Math.floor(video?.duration ?? video?.currentTime ?? 0)),
+            Number.isFinite(video?.duration) ? Math.max(0, video?.duration ?? 0) : undefined,
+          );
           void onCompleted();
         }}
         className="max-h-[520px] w-full rounded-[24px] bg-black"
@@ -857,19 +1057,40 @@ function SecureAudioStage({
   src,
   onOpened,
   onCompleted,
+  onProgress,
   onPauseAttempt,
 }: {
   asset: SecureAsset;
   src: string;
   onOpened: () => void | Promise<void>;
   onCompleted: () => void | Promise<void>;
+  onProgress: (elapsedSeconds: number, durationSeconds?: number | null) => void | Promise<void>;
   onPauseAttempt: () => void;
 }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const openedRef = useRef(false);
+  const reportedSecondRef = useRef(-1);
   const [hasStarted, setHasStarted] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
+
+  const reportCurrentProgress = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) {
+      return;
+    }
+
+    const elapsedSeconds = Math.max(0, Math.floor(audio.currentTime));
+    if (reportedSecondRef.current === elapsedSeconds) {
+      return;
+    }
+
+    reportedSecondRef.current = elapsedSeconds;
+    void onProgress(
+      elapsedSeconds,
+      Number.isFinite(audio.duration) ? Math.max(0, audio.duration) : undefined,
+    );
+  }, [onProgress]);
 
   const startAudio = useCallback(() => {
     const audio = audioRef.current;
@@ -909,6 +1130,11 @@ function SecureAudioStage({
             openedRef.current = true;
             void onOpened();
           }
+          reportCurrentProgress();
+        }}
+        onLoadedMetadata={() => {
+          reportedSecondRef.current = -1;
+          reportCurrentProgress();
         }}
         onPause={() => {
           const audio = audioRef.current;
@@ -918,7 +1144,15 @@ function SecureAudioStage({
           onPauseAttempt();
           void audio.play().catch(() => undefined);
         }}
+        onTimeUpdate={() => {
+          reportCurrentProgress();
+        }}
         onEnded={() => {
+          const audio = audioRef.current;
+          void onProgress(
+            Math.max(0, Math.floor(audio?.duration ?? audio?.currentTime ?? 0)),
+            Number.isFinite(audio?.duration) ? Math.max(0, audio?.duration ?? 0) : undefined,
+          );
           void onCompleted();
         }}
       />
